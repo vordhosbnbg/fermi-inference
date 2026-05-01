@@ -1,0 +1,25 @@
+# Build products and local clones
+build/
+cmake-build-*/
+
+# Model artifacts
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# Large or local run output
+results/runs/*
+!results/runs/.gitkeep
+
+# Local environment files
+.env
+.env.*
+*.local
+
+# Editor and OS noise
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
