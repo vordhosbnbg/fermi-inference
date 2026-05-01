@@ -12,6 +12,7 @@ Treat the host system as fragile and recoverability as a hard requirement.
 - Do not write to `/boot`, `/etc`, `/usr`, or other system paths from repository scripts.
 - Do not put model binaries, generated build trees, or large raw benchmark output in git.
 - Do not assume CUDA is viable for this hardware on a current Arch stack.
+- Do not run expensive builds, especially llama.cpp/CMake/Ninja builds, from a Codex session. Provide the command and working directory for the user to run in a normal local shell.
 
 ## Experiment Discipline
 

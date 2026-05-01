@@ -24,6 +24,9 @@ practical value on this hardware.
 - `docs/hardware.md`: target host and hardware constraints.
 - `docs/software-stack.md`: operating system, driver, OpenCL, and runtime notes.
 - `docs/boot-isolation.md`: boot-entry strategy and recovery rules.
+- `docs/build.md`: optimized llama.cpp build configuration and observed backend
+  probe results.
+- `docs/model-selection.md`: current model target and fallback rationale.
 - `docs/experiment-protocol.md`: manual benchmark protocol.
 - `docs/reference/sources.md`: upstream references used to evaluate feasibility.
 - `results/README.md`: result logging format.

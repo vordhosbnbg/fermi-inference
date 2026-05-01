@@ -24,7 +24,8 @@ Also record:
 - model filename and hash
 
 The vendored runtime lives at `third_party/llama.cpp`. Build it out of tree so
-the submodule remains clean unless an experiment intentionally patches it:
+the submodule remains clean unless an experiment intentionally patches it. See
+`docs/build.md` for the optimized build configuration.
 
 ```bash
 git submodule update --init --recursive third_party/llama.cpp
@@ -34,26 +35,30 @@ cmake --build build/llama.cpp-opencl -j"$(nproc)"
 
 ## 2. Select Model
 
-Start with a very small GGUF model:
+Start with the model target documented in `docs/model-selection.md`.
 
-- 1B parameters or smaller
-- `Q4_0` preferred
-- pure `Q4_0` preferred when available
-- small context first, such as `-c 256` or `-c 512`
+Current primary stretch target:
 
-Avoid starting with `Q4_K_M`. Current llama.cpp OpenCL documentation lists
-`Q4_0` as the optimized path and `Q4_K` work as incomplete.
+```text
+models/Qwen3-0.6B-Q4_0.gguf
+```
+
+Use a small context first, such as `-c 256` or `-c 512`.
 
 ## 3. CPU Baseline
 
 Example shape:
 
 ```bash
-./build/llama.cpp-opencl/bin/llama-cli \
-  -m ~/models/tinyllama-q4_0.gguf \
+./build/llama.cpp-opencl-native/bin/llama-cli \
+  --device none \
+  -ngl 0 \
+  -m models/Qwen3-0.6B-Q4_0.gguf \
   -p "Explain OpenCL in one short paragraph." \
   -c 512 \
-  -n 80
+  -n 80 \
+  --single-turn \
+  --reasoning off
 ```
 
 Record:
@@ -74,12 +79,14 @@ backend. Record the exact command and output.
 Start small:
 
 ```bash
-./build/llama.cpp-opencl/bin/llama-cli \
-  -m ~/models/tinyllama-q4_0.gguf \
+./build/llama.cpp-opencl-native/bin/llama-cli \
+  -m models/Qwen3-0.6B-Q4_0.gguf \
   -p "Explain OpenCL in one short paragraph." \
   -c 512 \
   -n 80 \
-  -ngl 1
+  -ngl 1 \
+  --single-turn \
+  --reasoning off
 ```
 
 Then try:
