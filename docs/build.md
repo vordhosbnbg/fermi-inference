@@ -109,7 +109,7 @@ Command:
 ./build/llama.cpp-opencl-native/bin/llama-cli --list-devices
 ```
 
-Observed from a host namespace:
+Observed from a host namespace before the Fermi fork patches:
 
 ```text
 ggml_opencl: selected platform: 'NVIDIA CUDA'
@@ -123,3 +123,22 @@ The `NVIDIA CUDA` string is the NVIDIA OpenCL platform name. The binary is not
 initializing CUDA. Current upstream llama.cpp OpenCL rejects this GPU before
 inference because it only accepts Adreno/Qualcomm and Intel devices, and then
 requires OpenCL C 2.0 or newer.
+
+The host OpenCL capability dump is recorded in
+`docs/clinfo-opencl-nvidia-390xx-gt540m.txt`. It confirms OpenCL C 1.1, no
+`cl_khr_fp16`, no subgroup extension, and a 496.3 MiB maximum single allocation.
+See `docs/opencl-fermi-plan.md` for the Fermi bring-up strategy.
+
+Observed after the Fermi fork patches:
+
+```text
+ggml_opencl: selected platform: 'NVIDIA CUDA'
+ggml_opencl: device: 'GeForce GT 540M (OpenCL 1.1 CUDA)'
+ggml_opencl: OpenCL driver: 390.157
+ggml_opencl: device FP16 support: false
+ggml_opencl: NVIDIA legacy mode enabled; only Q4_0 x F32 matmul is supported
+ggml_opencl: global mem size: 1985 MB
+ggml_opencl: legacy NVIDIA basic OpenCL C probe: true
+ggml_opencl: legacy NVIDIA q4_0 half-storage probe: true
+ggml_opencl: legacy NVIDIA Q4_0 x F32 matmul kernel: true
+```

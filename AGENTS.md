@@ -30,3 +30,40 @@ Every recorded run should include:
 - relevant stderr/stdout or a link to raw local logs
 
 Prefer documentation and reproducible manual commands over automation that changes system state.
+
+## Current Fermi/OpenCL State
+
+- The active llama.cpp work is in `third_party/llama.cpp` on branch
+  `fermi-opencl-legacy`, backed by the fork
+  `git@github.com:vordhosbnbg/llama.cpp.git`.
+- The host uses `opencl-nvidia-390xx` with NVIDIA driver `390.157`; the GT 540M
+  exposes OpenCL 1.1, no `cl_khr_fp16`, and no subgroup support.
+- The fork has a narrow legacy NVIDIA OpenCL path. It detects the GT 540M,
+  compiles OpenCL C 1.1 probes, and supports only Q4_0 x F32 `MUL_MAT` plus
+  simple view/no-op style graph nodes.
+- Broad offload is confirmed but slow: `-ngl 100` on
+  `models/Qwen3-0.6B-Q4_0.gguf` places about 319 MiB of model weights on
+  `GPUOpenCL`, but observed generation is about 0.8 tok/s because unsupported
+  ops and transfers dominate.
+- Use `-fit off` for controlled OpenCL experiments. Sweep low offload counts
+  such as `-ngl 1`, `2`, `4`, `8`, and `16` before trying full offload.
+- Memory reporting for the OpenCL device is patched in the fork. A healthy run
+  should show about `1985 MiB` total GPU memory and nonzero model memory when
+  offload is active.
+
+## Build Handoff
+
+When a rebuild is needed, give the user the working directory and command. Do
+not run this from a Codex session.
+
+Working directory:
+
+```bash
+/home/vordhosbn/code/fermi-inference
+```
+
+Preferred incremental build:
+
+```bash
+cmake --build build/llama.cpp-opencl-native --target llama-cli -j 1
+```

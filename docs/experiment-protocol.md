@@ -27,11 +27,8 @@ The vendored runtime lives at `third_party/llama.cpp`. Build it out of tree so
 the submodule remains clean unless an experiment intentionally patches it. See
 `docs/build.md` for the optimized build configuration.
 
-```bash
-git submodule update --init --recursive third_party/llama.cpp
-cmake -S third_party/llama.cpp -B build/llama.cpp-opencl -DGGML_OPENCL=ON
-cmake --build build/llama.cpp-opencl -j"$(nproc)"
-```
+Do not run unconstrained builds on this laptop. Use the documented configure and
+`-j2` build commands from `docs/build.md` in a normal local shell.
 
 ## 2. Select Model
 
@@ -74,6 +71,9 @@ Record:
 Before offloading layers, verify that llama.cpp lists or initializes the OpenCL
 backend. Record the exact command and output.
 
+Current upstream llama.cpp is expected to reject the GT 540M. The active
+bring-up plan is documented in `docs/opencl-fermi-plan.md`.
+
 ## 5. OpenCL Offload Matrix
 
 Start small:
@@ -92,11 +92,17 @@ Start small:
 Then try:
 
 ```text
+-ngl 0
+-ngl 1
 -ngl 2
 -ngl 4
 -ngl 8
--ngl 99
+-ngl 16
+-ngl 100
 ```
+
+Use `-fit off` for controlled comparisons so llama.cpp does not adjust layer
+offload or context choices between runs.
 
 Stop increasing offload if any of these appear:
 
@@ -119,6 +125,13 @@ Meaningful success:
 - at least one transformer layer offloads without crashing
 - GPU memory usage changes during inference
 - output generation completes correctly
+
+Current Fermi checkpoint:
+
+- `-ngl 100` with `models/Qwen3-0.6B-Q4_0.gguf` offloads about 319 MiB of model
+  weights to `GPUOpenCL` and completes generation.
+- The same run is slow, around 0.8 generation tokens/sec.
+- Treat broad offload as a correctness proof, not a performance setting.
 
 Strong success:
 

@@ -1,0 +1,106 @@
+Number of platforms                               1
+  Platform Name                                   NVIDIA CUDA
+  Platform Vendor                                 NVIDIA Corporation
+  Platform Version                                OpenCL 1.2 CUDA 9.1.84
+  Platform Profile                                FULL_PROFILE
+  Platform Extensions                             cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_fp64 cl_khr_byte_addressable_store cl_khr_icd cl_khr_gl_sharing cl_nv_compiler_options cl_nv_device_attribute_query cl_nv_pragma_unroll cl_nv_copy_opts cl_nv_create_buffer
+  Platform Extensions function suffix             NV
+
+  Platform Name                                   NVIDIA CUDA
+Number of devices                                 1
+  Device Name                                     GeForce GT 540M
+  Device Vendor                                   NVIDIA Corporation
+  Device Vendor ID                                0x10de
+  Device Version                                  OpenCL 1.1 CUDA
+  Driver Version                                  390.157
+  Device OpenCL C Version                         OpenCL C 1.1 
+  Device Type                                     GPU
+  Device Topology (NV)                            PCI-E, 0000:01:00.0
+  Device Profile                                  FULL_PROFILE
+  Device Available                                Yes
+  Compiler Available                              Yes
+  Max compute units                               2
+  Max clock frequency                             1344MHz
+  Compute Capability (NV)                         2.1
+  Max work item dimensions                        3
+  Max work item sizes                             1024x1024x64
+  Max work group size                             1024
+  Preferred work group size multiple (kernel)     32
+  Warp size (NV)                                  32
+  Preferred / native vector sizes                 
+    char                                                 1 / 1       
+    short                                                1 / 1       
+    int                                                  1 / 1       
+    long                                                 1 / 1       
+    half                                                 0 / 0        (n/a)
+    float                                                1 / 1       
+    double                                               1 / 1        (cl_khr_fp64)
+  Half-precision Floating-point support           (n/a)
+  Single-precision Floating-point support         (core)
+    Denormals                                     Yes
+    Infinity and NANs                             Yes
+    Round to nearest                              Yes
+    Round to zero                                 Yes
+    Round to infinity                             Yes
+    IEEE754-2008 fused multiply-add               Yes
+    Support is emulated in software               No
+    Correctly-rounded divide and sqrt operations  No
+  Double-precision Floating-point support         (cl_khr_fp64)
+    Denormals                                     Yes
+    Infinity and NANs                             Yes
+    Round to nearest                              Yes
+    Round to zero                                 Yes
+    Round to infinity                             Yes
+    IEEE754-2008 fused multiply-add               Yes
+    Support is emulated in software               No
+  Address bits                                    64, Little-Endian
+  Global memory size                              2081751040 (1.939GiB)
+  Error Correction support                        No
+  Max memory allocation                           520437760 (496.3MiB)
+  Unified memory for Host and Device              No
+  Integrated memory (NV)                          No
+  Minimum alignment for any data type             128 bytes
+  Alignment of base address                       4096 bits (512 bytes)
+  Global Memory cache type                        Read/Write
+  Global Memory cache size                        32768 (32KiB)
+  Global Memory cache line size                   128 bytes
+  Image support                                   Yes
+    Max number of samplers per kernel             16
+    Max 2D image size                             16384x16384 pixels
+    Max 3D image size                             2048x2048x2048 pixels
+    Max number of read image args                 128
+    Max number of write image args                8
+  Local memory type                               Local
+  Local memory size                               49152 (48KiB)
+  Registers per block (NV)                        32768
+  Max number of constant args                     9
+  Max constant buffer size                        65536 (64KiB)
+  Max size of kernel argument                     4352 (4.25KiB)
+  Queue properties                                
+    Out-of-order execution                        Yes
+    Profiling                                     Yes
+  Profiling timer resolution                      1000ns
+  Execution capabilities                          
+    Run OpenCL kernels                            Yes
+    Run native kernels                            No
+    Kernel execution timeout (NV)                 No
+    Concurrent copy and kernel execution (NV)     Yes
+      Number of async copy engines                1
+  Device Extensions                               cl_khr_global_int32_base_atomics cl_khr_global_int32_extended_atomics cl_khr_local_int32_base_atomics cl_khr_local_int32_extended_atomics cl_khr_fp64 cl_khr_byte_addressable_store cl_khr_icd cl_khr_gl_sharing cl_nv_compiler_options cl_nv_device_attribute_query cl_nv_pragma_unroll cl_nv_copy_opts cl_nv_create_buffer
+
+NULL platform behavior
+  clGetPlatformInfo(NULL, CL_PLATFORM_NAME, ...)  NVIDIA CUDA
+  clGetDeviceIDs(NULL, CL_DEVICE_TYPE_ALL, ...)   Success [NV]
+  clCreateContext(NULL, ...) [default]            Success [NV]
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_DEFAULT)  No platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CPU)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_GPU)  No platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ACCELERATOR)  No devices found in platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_CUSTOM)  Invalid device type for platform
+  clCreateContextFromType(NULL, CL_DEVICE_TYPE_ALL)  No platform
+
+ICD loader properties
+  ICD loader Name                                 OpenCL ICD Loader
+  ICD loader Vendor                               OCL Icd free software
+  ICD loader Version                              2.3.4
+  ICD loader Profile                              OpenCL 3.0
