@@ -268,19 +268,14 @@ def run_command_pty(
     env = os.environ.copy()
     env.update(env_vars)
     started = time.monotonic()
-    master_fd, slave_fd = pty.openpty()
-    try:
-        proc = subprocess.Popen(
-            cmd,
-            cwd=cwd,
-            env=env,
-            stdin=slave_fd,
-            stdout=slave_fd,
-            stderr=slave_fd,
-            close_fds=True,
-        )
-    finally:
-        os.close(slave_fd)
+    pid, master_fd = pty.fork()
+    if pid == 0:
+        try:
+            os.chdir(cwd)
+            os.execvpe(cmd[0], cmd, env)
+        except Exception as exc:
+            os.write(2, f"exec failed: {exc}\n".encode("utf-8", errors="replace"))
+            os._exit(127)
 
     with log_path.open("w", encoding="utf-8", errors="replace") as log:
         while True:
@@ -299,7 +294,8 @@ def run_command_pty(
                 sys.stdout.write(text)
                 sys.stdout.flush()
 
-    returncode = proc.wait()
+    _, status = os.waitpid(pid, 0)
+    returncode = os.waitstatus_to_exitcode(status)
     os.close(master_fd)
     return returncode, time.monotonic() - started
 
