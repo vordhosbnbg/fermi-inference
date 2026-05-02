@@ -22,7 +22,9 @@ practical value on this hardware.
   on OpenCL. Generation is still much slower than CPU-only inference; the
   remaining unsupported graph op is `FLASH_ATTN_EXT`. Initial low-offload
   points show `-ngl 2` faster than `-ngl 3` and `4`, so the next useful work is
-  transfer and attention attribution rather than more simple op coverage.
+  transfer and attention attribution rather than more simple op coverage. The
+  fork now has trace aggregation for transfers by tensor/op and synchronization
+  by reason for the next rebuild.
 
 ## Repository Layout
 

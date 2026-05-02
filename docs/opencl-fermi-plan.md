@@ -184,6 +184,13 @@ add regular launch/readback/synchronization work and one unsupported
 results. Keep `-fit off`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for
 comparability.
 
+The current trace patch adds attribution for those regular costs. Final trace
+output now includes transfer totals by tensor/op, transfer totals by producing
+op, `clFinish` counts by reason, and `sync_other` split into total calls, real
+waits, and skipped no-other-device checks. Rerun the measured `-ngl 2`, `3`,
+and `4` points after rebuilding to determine whether D2H is dominated by
+attention fallback tensors, final logits, or another boundary.
+
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
 is tracked in `docs/opencl-fermi-fork-roadmap.md`.
 
@@ -207,6 +214,8 @@ Current status:
 - Clean inference with nonzero OpenCL model memory: achieved.
 - Trace-guided non-attention Qwen3 op coverage at `-ngl 3`: achieved.
 - First low-offload sweep points (`-ngl 2`, `3`, `4`): achieved; no speedup.
+- Transfer and synchronization attribution patch: implemented, needs rebuilt
+  trace output.
 - Performance improvement over CPU: not achieved.
 
 Strong success:

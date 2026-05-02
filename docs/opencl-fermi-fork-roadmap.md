@@ -78,6 +78,14 @@ The `-ngl 2` to `4` trend is negative. Each additional offloaded layer after
 attention fallback. That makes transfer and attention attribution more valuable
 than adding more simple F32 kernels.
 
+The current fork patch adds that attribution. Legacy trace output now splits
+`sync_other` into total calls, real waits, and skipped no-other-device checks,
+and prints final summaries for:
+
+- H2D/D2H transfer totals by tensor name, producing op, and tensor type
+- H2D/D2H transfer totals by producing op
+- `clFinish` counts by reason
+
 ## Qwen3 Graph Surface
 
 The relevant Qwen3 graph in llama.cpp is built in
@@ -155,6 +163,24 @@ The legacy NVIDIA trace records, per graph node:
 - kernel launch count
 - optional kernel timing when `GGML_OPENCL_PROFILING=ON`
 
+The current trace also prints final aggregate lines:
+
+```text
+transfer-op-summary direction=d2h op=<op> count=<n> bytes=<n> avg=<n>
+transfer-tensor-summary direction=d2h rank=<n> tensor=<name> op=<op> type=<type> count=<n> bytes=<n> min=<n> max=<n> avg=<n>
+finish-summary reason=<reason> count=<n>
+```
+
+`sync_other` is reported as:
+
+```text
+sync_other=[calls=<n>,waits=<n>,skipped=<n>]
+```
+
+On the current single-OpenCL-device setup, `skipped` should account for the
+old inflated `sync_other` count. Nonzero `waits` would mean the run actually
+queued cross-device synchronization.
+
 The trace is enabled with:
 
 ```text
@@ -180,7 +206,7 @@ Continue using this instrumentation to generate op inventories for:
 ```
 
 At the current checkpoint, unsupported simple ops are no longer the main
-bottleneck. The next trace work should aggregate D2H transfers by tensor/op and
+bottleneck. The next trace run should use the new transfer summaries to
 distinguish final logits reads from attention fallback reads.
 
 ### 2. Make Backend Claims Match Real Kernel Support
@@ -418,15 +444,18 @@ Completed:
 Next:
 
 1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
-2. Add D2H transfer aggregation by tensor/op.
-3. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
+2. Rebuild and rerun `-ngl 2`, `3`, and `4` with the transfer-attribution
+   trace patch.
+3. Decide whether D2H is dominated by attention fallback tensors, final logits,
+   or another boundary.
+4. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-4. Investigate a simple attention path for small context and single-token
+5. Investigate a simple attention path for small context and single-token
    generation.
-5. Move KV cache for offloaded layers to OpenCL only after attention behavior
+6. Move KV cache for offloaded layers to OpenCL only after attention behavior
    is understood.
-6. Expand prompt-eval coverage.
-7. Reassess performance before broadening model or quantization support.
+7. Expand prompt-eval coverage.
+8. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 

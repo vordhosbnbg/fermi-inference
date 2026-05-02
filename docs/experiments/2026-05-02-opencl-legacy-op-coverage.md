@@ -158,6 +158,12 @@ The `sync_other` counter is currently inflated as a diagnostic count: it is
 incremented before the backend checks whether another OpenCL device exists.
 It should not be read as 1990 real cross-device barriers.
 
+A follow-up trace patch changes this for future runs. New trace output reports
+`sync_other=[calls=<n>,waits=<n>,skipped=<n>]`, where `skipped` means no other
+OpenCL device existed and no cross-device wait was queued. It also prints
+aggregate transfer summaries by tensor/op and by producing op, plus
+`finish-summary` lines grouped by `clFinish` reason.
+
 ## Interpretation
 
 The original bottleneck was broad CPU fallback around every OpenCL matmul. That
@@ -182,11 +188,19 @@ remaining boundary is attention and the associated host/GPU traffic.
    The `-ngl 2`, `3`, and `4` points are now recorded. Keep `-fit off`,
    `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for comparability.
 
-2. Add trace detail for D2H transfers:
+2. Rebuild with the transfer-attribution trace patch and rerun the measured
+   `-ngl 2`, `3`, and `4` points. Inspect the new final summary lines:
 
-   - aggregate readbacks by tensor name and op
-   - distinguish final logits reads from CPU fallback reads
-   - report average bytes per D2H transfer
+   ```text
+   transfer-op-summary direction=d2h ...
+   transfer-tensor-summary direction=d2h ...
+   finish-summary reason=...
+   sync_other=[calls=...,waits=...,skipped=...]
+   ```
+
+   Use these to distinguish final logits reads from CPU fallback reads and to
+   confirm whether the old `sync_other` count was only skipped single-device
+   checks.
 
 3. Investigate attention as a separate implementation phase. The next useful
    kernel is likely a narrow decode-oriented F32 attention path for Qwen3

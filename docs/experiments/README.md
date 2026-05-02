@@ -24,3 +24,7 @@ Current checkpoint:
   `2.6`, `2.4`, and `2.2` generation tokens/sec respectively. Complete the
   remaining `-ngl 0`, `1`, `8`, and `16` points before making a final
   performance call.
+- The current fork patch adds transfer and synchronization attribution to the
+  legacy trace. After rebuilding, rerun `-ngl 2`, `3`, and `4` and inspect
+  `transfer-tensor-summary`, `transfer-op-summary`, `finish-summary`, and the
+  split `sync_other=[calls=...,waits=...,skipped=...]` field.
