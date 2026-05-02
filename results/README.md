@@ -20,6 +20,10 @@ By default it runs the no-`-nkvo`, output-on-CPU sweep for
 `-ngl 2 3 4 8 16`, writes raw logs under `results/runs/.../logs/`, and writes
 both `summary.md` and `summary.tsv`.
 
+The helper captures `llama-cli` through a pseudo-terminal by default because
+the human-facing prompt/generation tokens/sec line may not be printed when
+stdout is a normal pipe.
+
 ## Run Directory Shape
 
 Suggested local files:

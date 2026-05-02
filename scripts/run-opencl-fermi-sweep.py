@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import csv
 import datetime as dt
+import errno
 import hashlib
 import os
+import pty
 import re
 import shlex
 import socket
@@ -71,6 +73,9 @@ HOST_MEM_RE = re.compile(
 PLATFORM_RE = re.compile(r"ggml_opencl: selected platform: '(?P<value>.*)'")
 DEVICE_RE = re.compile(r"ggml_opencl: device: '(?P<value>.*)'")
 DRIVER_RE = re.compile(r"ggml_opencl: OpenCL driver: (?P<value>.*)")
+ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+NGL_LOG_RE = re.compile(r"opencl-ngl-(?P<ngl>\d+)\.log$")
+NGL_CMD_RE = re.compile(r"(?:^|\s)-ngl\s+(?P<ngl>\d+)(?:\s|$)")
 
 
 def repo_root() -> Path:
@@ -126,7 +131,8 @@ def parse_log(text: str) -> dict[str, object]:
     transfers: dict[tuple[str, str], dict[str, int]] = {}
     finishes_by_reason: dict[str, int] = {}
 
-    for line in text.splitlines():
+    for raw_line in text.splitlines():
+        line = ANSI_RE.sub("", raw_line).strip()
         if match := TPS_RE.search(line):
             data["prompt_tps"] = float(match.group("prompt"))
             data["generation_tps"] = float(match.group("gen"))
@@ -168,7 +174,8 @@ def parse_log(text: str) -> dict[str, object]:
     data["ops"] = ops
     data["transfer_ops"] = transfers
     data["finishes_by_reason"] = finishes_by_reason
-    data["completed"] = "yes" if "generation_tps" in data and "support_rejected" in data else "no"
+    data["throughput_parsed"] = "yes" if "generation_tps" in data else "no"
+    data["completed"] = "yes" if "support_rejected" in data and "finishes" in data else "no"
     return data
 
 
@@ -215,6 +222,19 @@ def run_command(
     cwd: Path,
     log_path: Path,
     stream: bool,
+    use_pty: bool,
+) -> tuple[int, float]:
+    if use_pty:
+        return run_command_pty(cmd, env_vars, cwd, log_path, stream)
+    return run_command_pipe(cmd, env_vars, cwd, log_path, stream)
+
+
+def run_command_pipe(
+    cmd: list[str],
+    env_vars: dict[str, str],
+    cwd: Path,
+    log_path: Path,
+    stream: bool,
 ) -> tuple[int, float]:
     env = os.environ.copy()
     env.update(env_vars)
@@ -236,6 +256,52 @@ def run_command(
             if stream:
                 print(line, end="", flush=True)
     return proc.wait(), time.monotonic() - started
+
+
+def run_command_pty(
+    cmd: list[str],
+    env_vars: dict[str, str],
+    cwd: Path,
+    log_path: Path,
+    stream: bool,
+) -> tuple[int, float]:
+    env = os.environ.copy()
+    env.update(env_vars)
+    started = time.monotonic()
+    master_fd, slave_fd = pty.openpty()
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            close_fds=True,
+        )
+    finally:
+        os.close(slave_fd)
+
+    with log_path.open("w", encoding="utf-8", errors="replace") as log:
+        while True:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError as exc:
+                if exc.errno == errno.EIO:
+                    break
+                raise
+            if not chunk:
+                break
+            text = chunk.decode("utf-8", errors="replace")
+            log.write(text)
+            log.flush()
+            if stream:
+                sys.stdout.write(text)
+                sys.stdout.flush()
+
+    returncode = proc.wait()
+    os.close(master_fd)
+    return returncode, time.monotonic() - started
 
 
 def table_row(result: dict[str, object], op: str, field: str) -> object:
@@ -270,6 +336,7 @@ def summary_columns() -> list[str]:
         "ngl",
         "returncode",
         "completed",
+        "throughput_parsed",
         "prompt_tps",
         "generation_tps",
         "opencl_platform",
@@ -349,15 +416,16 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
             f.write(f"- {key}: `{value}`\n")
         f.write("\n## Results\n\n")
         f.write(
-            "| `-ngl` | completed | rc | prompt t/s | gen t/s | GPU model MiB | GPU context MiB | "
+            "| `-ngl` | completed | throughput parsed | rc | prompt t/s | gen t/s | GPU model MiB | GPU context MiB | "
             "support rejects | kernels | H2D bytes | D2H bytes | finishes | log |\n"
         )
-        f.write("| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+        f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
         for result in results:
             f.write(
                 "| "
                 f"`{md_value(result.get('ngl'))}` | "
                 f"{md_value(result.get('completed'))} | "
+                f"{md_value(result.get('throughput_parsed'))} | "
                 f"{md_value(result.get('returncode'))} | "
                 f"{md_value(result.get('prompt_tps'))} | "
                 f"{md_value(result.get('generation_tps'))} | "
@@ -407,6 +475,92 @@ def write_metadata(path: Path, metadata: dict[str, str]) -> None:
             f.write(f"{key}={shlex.quote(value)}\n")
 
 
+def read_metadata(path: Path) -> dict[str, str]:
+    metadata: dict[str, str] = {}
+    if not path.exists():
+        return metadata
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        parts = shlex.split(value)
+        metadata[key] = parts[0] if parts else ""
+    return metadata
+
+
+def read_existing_rows(path: Path) -> dict[int, dict[str, str]]:
+    if not path.exists():
+        return {}
+    with path.open("r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f, delimiter="\t")
+        rows: dict[int, dict[str, str]] = {}
+        for row in reader:
+            try:
+                rows[int(row.get("ngl", ""))] = row
+            except ValueError:
+                continue
+    return rows
+
+
+def read_commands(path: Path) -> dict[int, str]:
+    commands: dict[int, str] = {}
+    if not path.exists():
+        return commands
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        match = NGL_CMD_RE.search(line)
+        if match:
+            commands[int(match.group("ngl"))] = line
+    return commands
+
+
+def summarize_existing_run(run_dir: Path) -> int:
+    logs_dir = run_dir / "logs"
+    metadata = read_metadata(run_dir / "metadata.env")
+    old_rows = read_existing_rows(run_dir / "summary.tsv")
+    commands = read_commands(run_dir / "commands.sh")
+    results: list[dict[str, object]] = []
+
+    for log_path in sorted(logs_dir.glob("opencl-ngl-*.log"), key=lambda p: int(NGL_LOG_RE.search(p.name).group("ngl")) if NGL_LOG_RE.search(p.name) else -1):
+        match = NGL_LOG_RE.search(log_path.name)
+        if not match:
+            continue
+        ngl = int(match.group("ngl"))
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        result = parse_log(text)
+        old = old_rows.get(ngl, {})
+        result.update(
+            {
+                "ngl": ngl,
+                "returncode": old.get("returncode", ""),
+                "elapsed_s": old.get("elapsed_s", ""),
+                "log": str(log_path.relative_to(run_dir)),
+                "command": commands.get(ngl, ""),
+            }
+        )
+        if result.get("returncode") not in ("", "0", 0):
+            result["completed"] = "no"
+        results.append(result)
+
+    write_tsv(run_dir / "summary.tsv", results)
+    write_summary_md(run_dir / "summary.md", metadata, results)
+    print(f"Regenerated {run_dir / 'summary.md'}")
+    print(f"Regenerated {run_dir / 'summary.tsv'}")
+    for result in results:
+        print(
+            "  -ngl {ngl}: completed={completed} throughput_parsed={throughput} gen={gen} tok/s "
+            "rejects={rejects} d2h={d2h_count}/{d2h_bytes}B".format(
+                ngl=result.get("ngl", ""),
+                completed=result.get("completed", ""),
+                throughput=result.get("throughput_parsed", ""),
+                gen=result.get("generation_tps", ""),
+                rejects=result.get("support_rejected", ""),
+                d2h_count=result.get("d2h_count", ""),
+                d2h_bytes=result.get("d2h_bytes", ""),
+            )
+        )
+    return 0
+
+
 def write_system_state(path: Path, root: Path) -> None:
     commands = [
         ("date", ["date", "--iso-8601=seconds"]),
@@ -446,6 +600,7 @@ def make_metadata(args: argparse.Namespace, root: Path, run_dir: Path, ngl_value
         "kv_offload": "disabled (-nkvo)" if args.nkvo else "enabled",
         "output_cpu": "false" if args.no_output_cpu else "true",
         "trace": "false" if args.no_trace else "true",
+        "capture_pty": "false" if args.no_pty else "true",
     }
     return metadata
 
@@ -466,6 +621,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-trace", action="store_true", help="Do not set GGML_OPENCL_NVIDIA_LEGACY_TRACE=1")
     parser.add_argument("--no-hash", action="store_true", help="Skip hashing the model file")
     parser.add_argument("--no-stream", action="store_true", help="Do not stream llama-cli output to the terminal")
+    parser.add_argument("--no-pty", action="store_true", help="Capture with a pipe instead of a pseudo-terminal")
+    parser.add_argument("--summarize-existing", type=Path, help="Rebuild summary files from an existing run directory")
     parser.add_argument("--continue-on-failure", action="store_true", help="Continue to the next -ngl after a failed run")
     parser.add_argument("--dry-run", action="store_true", help="Write metadata and commands without executing llama-cli")
     parser.add_argument("--extra-arg", action="append", default=[], help="Append one extra llama-cli argument; repeat as needed")
@@ -475,6 +632,12 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     root = repo_root()
+    if args.summarize_existing:
+        run_dir = args.summarize_existing
+        if not run_dir.is_absolute():
+            run_dir = root / run_dir
+        return summarize_existing_run(run_dir)
+
     if not args.binary.is_absolute():
         args.binary = root / args.binary
     if not args.model.is_absolute():
@@ -523,7 +686,7 @@ def main() -> int:
                 "command": rendered,
             }
         else:
-            returncode, elapsed = run_command(cmd, env_vars, root, log_path, not args.no_stream)
+            returncode, elapsed = run_command(cmd, env_vars, root, log_path, not args.no_stream, not args.no_pty)
             text = log_path.read_text(encoding="utf-8", errors="replace")
             result = parse_log(text)
             result.update(
@@ -537,6 +700,8 @@ def main() -> int:
             )
             if returncode != 0:
                 result["completed"] = "no"
+            if result.get("throughput_parsed") != "yes":
+                print(f"warning: throughput line was not parsed for -ngl {ngl}; see {log_path}")
 
         results.append(result)
         write_tsv(run_dir / "summary.tsv", results)
