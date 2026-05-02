@@ -16,7 +16,9 @@ practical value on this hardware.
   test entry.
 - OpenCL enumeration works through the NVIDIA 390xx OpenCL runtime.
 - `clpeak` has compiled and executed kernels successfully.
-- llama.cpp CPU inference is expected to work; OpenCL offload remains unproven.
+- llama.cpp CPU inference works with `Qwen3-0.6B-Q4_0.gguf`.
+- The local llama.cpp fork proves OpenCL model-weight offload on the GT 540M,
+  but full offload is currently much slower than CPU-only inference.
 
 ## Repository Layout
 
@@ -28,6 +30,8 @@ practical value on this hardware.
   probe results.
 - `docs/model-selection.md`: current model target and fallback rationale.
 - `docs/experiment-protocol.md`: manual benchmark protocol.
+- `docs/opencl-fermi-fork-roadmap.md`: remaining fork work for the current
+  Qwen3 `Q4_0` OpenCL path.
 - `docs/reference/sources.md`: upstream references used to evaluate feasibility.
 - `results/README.md`: result logging format.
 - `third_party/llama.cpp`: llama.cpp upstream as a git submodule.

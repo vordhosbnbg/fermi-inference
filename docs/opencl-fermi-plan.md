@@ -148,6 +148,9 @@ and transfer overhead between CPU and GPU. The next experiment should sweep low
 offload counts (`-ngl 1`, `2`, `4`, `8`, `16`) and compare them against
 CPU-only and full-offload results.
 
+The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
+is tracked in `docs/opencl-fermi-fork-roadmap.md`.
+
 ## Success Criteria
 
 Minimum success:
