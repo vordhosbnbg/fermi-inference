@@ -31,7 +31,10 @@ Current fork state:
 
 The current fork proves that the device can hold and use offloaded model
 weights and can execute the repeated non-attention Qwen3 ops around the
-offloaded layers. It does not yet keep attention on the GPU.
+offloaded layers. The fork now also has a narrow legacy `FLASH_ATTN_EXT` kernel
+for the Qwen3 Fermi shape, but KV-cache residency is not solved: with `-nkvo`,
+attention can execute on OpenCL while repeatedly uploading CPU-resident K/V
+cache tensors.
 
 ## Current Trace-Guided Checkpoint
 
@@ -113,6 +116,31 @@ generation improves sharply:
 
 For Fermi performance experiments, keep the output layer on CPU and focus on
 the per-layer attention fallback.
+
+The first decode-attention checkpoint confirms that the legacy attention kernel
+can execute. With `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`, `-ngl 4`, `-ub 1`, and
+`-nkvo`, the run improved from about `7.3 tok/s` generation to `8.2 tok/s`.
+The trace showed:
+
+```text
+FLASH_ATTN_EXT supports=[accepted=33,rejected=3] compute=[nodes=99,failed=0,kernels=99]
+transfers=[h2d=373/130666156B,d2h=208/851968B]
+```
+
+The three remaining rejects were not decode failures. They were the scheduler's
+small prompt/reserve shape:
+
+```text
+q_ne=[128,16,16,1] k_ne=[128,256,8,1] v_ne=[128,256,8,1]
+```
+
+The fork now extends the legacy attention launch across the query dimension for
+`n_q <= 16`, so the next rebuild should accept those checks too. The larger
+new cost is H2D traffic: each offloaded layer repeatedly uploads padded
+`cache_k` and `cache_v` views from CPU memory, about `17.3 MiB` per cache tensor
+over the short run. This is expected while using `-nkvo`; the next measurement
+should compare the same run without `-nkvo` to see whether GPU-resident KV cache
+is viable or exposes missing cache update ops.
 
 ## Qwen3 Graph Surface
 
@@ -386,7 +414,9 @@ until the Qwen3 path is correct.
 ### 9. Move KV Cache for Offloaded Layers to OpenCL
 
 Without GPU-resident KV cache, attention will continue to bounce across the host
-boundary.
+boundary. The first working legacy attention run confirmed this directly:
+`FLASH_ATTN_EXT` executed on OpenCL, but `-nkvo` forced repeated H2D uploads of
+the padded K/V cache.
 
 Needed work:
 
@@ -406,17 +436,17 @@ is secondary to correctness.
 The current upstream OpenCL attention support should not be assumed usable on
 Fermi. The legacy path needs a simple buffer-based attention implementation.
 
-Current first step: the fork is adding a legacy-only decode kernel for the
+Current first step: the fork has a legacy-only attention kernel for the
 observed Qwen3 shape rather than enabling the generic upstream kernels. The
 target shape is deliberately narrow:
 
-- `FLASH_ATTN_EXT` with `n_q == 1`
+- `FLASH_ATTN_EXT` with `1 <= n_q <= 16`
 - head dimension `128`
 - Qwen3 `16` query heads and `8` KV heads
 - F32 Q and output
 - F16 or F32 K/V/mask storage, with F16 converted through `vload_half`
 - no sinks, ALiBi, or logit softcap
-- context ceiling `-c 128` for the first validation pass
+- padded KV length up to `256` for the first validation pass
 
 Required pieces:
 
@@ -430,7 +460,7 @@ Implementation guidance:
 
 - prefer simple, inspectable kernels over flash-attention-style fusion
 - support small context and `-ub 1` generation first
-- add prompt-eval support after generation correctness is proven
+- support small prompt/reserve microbatches before broad prompt-eval work
 - keep all temporary score/probability buffers within the allocation limit
 - document any context-size ceiling imposed by temporary buffers
 
@@ -524,19 +554,23 @@ Completed:
 7. Confirm output-on-CPU `-ngl 16` still scales with per-layer attention
    fallback: `15` `FLASH_ATTN_EXT` rejections, `1495` D2H transfers, and
    `2.3 tok/s` generation.
+8. Add a narrow legacy `FLASH_ATTN_EXT` kernel for Qwen3 decode attention.
+9. Extend that kernel to small `n_q <= 16` attention microbatches.
 
 Next:
 
-1. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
-2. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
-3. Test the narrow legacy decode attention kernel against the fixed `-c 128`,
-   `-ub 1`, Qwen3 shape before broadening support.
-4. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
+1. Rebuild and rerun the fixed `-ngl 4`, `-ub 1`, `-nkvo` attention trace.
+   Expected signal: `FLASH_ATTN_EXT` support rejects drop to zero.
+2. Repeat the same run without `-nkvo` to test whether KV cache can stay
+   OpenCL-resident for offloaded layers or whether cache update ops are missing.
+3. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
+4. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
+5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-5. Move KV cache for offloaded layers to OpenCL only after attention behavior
-   is understood.
-6. Expand prompt-eval coverage.
-7. Reassess performance before broadening model or quantization support.
+6. Move KV cache for offloaded layers to OpenCL only after the non-`-nkvo`
+   behavior is understood.
+7. Expand prompt-eval coverage.
+8. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 
