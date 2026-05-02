@@ -20,7 +20,9 @@ Current fork state:
 - OpenCL device family added: `NVIDIA_LEGACY`
 - OpenCL C target: `OpenCL C 1.1`
 - supported quantized weight path: raw GGUF `Q4_0` block storage
-- supported compute path: `Q4_0 x F32` `GGML_OP_MUL_MAT`
+- supported matmul path: `Q4_0 x F32` `GGML_OP_MUL_MAT`
+- supported non-attention Qwen3 helper ops: F32 `ADD`, `MUL`, `RMS_NORM`,
+  normal/NeoX `ROPE`, `SWIGLU`, and F32/Q4_0 `GET_ROWS`
 - supported graph plumbing: simple view/reshape/permutation no-op style nodes
 - known working proof: `-fit off -ngl 100` puts about `319 MiB` of
   `Qwen3-0.6B-Q4_0.gguf` weights on `GPUOpenCL`
@@ -28,7 +30,40 @@ Current fork state:
   generation because unsupported ops and synchronization dominate
 
 The current fork proves that the device can hold and use offloaded model
-weights. It does not yet keep a full Qwen3 decoder layer on the GPU.
+weights and can execute the repeated non-attention Qwen3 ops around the
+offloaded layers. It does not yet keep attention on the GPU.
+
+## Current Trace-Guided Checkpoint
+
+The latest controlled run is documented in
+`docs/experiments/2026-05-02-opencl-legacy-op-coverage.md`.
+
+Run shape:
+
+```text
+build b9005-b57f9d327
+model models/Qwen3-0.6B-Q4_0.gguf
+-fit off --device GPUOpenCL -c 128 -n 8 -b 32 -ub 1 -nkvo -ngl 3
+```
+
+Result:
+
+```text
+[ Prompt: 9.2 t/s | Generation: 2.4 t/s ]
+supports=[queries=4310,accepted=4308,rejected=2]
+kernels=1219
+transfers=[h2d=199/106043564B,d2h=208/7158784B]
+finishes=591
+```
+
+Per-op outcome:
+
+- `ADD`, `MUL`, `RMS_NORM`, `MUL_MAT`, `GET_ROWS`, `ROPE`, and `GLU/SWIGLU`
+  are accepted and execute on OpenCL.
+- The only remaining support rejection is `FLASH_ATTN_EXT`.
+- Generation is still slower than CPU-only, so the project has moved from
+  "add simple missing ops" to "measure attention/readback/synchronization
+  costs."
 
 ## Qwen3 Graph Surface
 
@@ -88,12 +123,14 @@ Level 3 is a research target. It may still be slower than CPU on this hardware.
 
 ## Required Improvements
 
-### 1. Add Placement and Transfer Instrumentation
+### 1. Maintain Placement and Transfer Instrumentation
 
-Before adding more kernels, the fork needs direct evidence about where time and
-data movement go.
+The fork now has `GGML_OPENCL_NVIDIA_LEGACY_TRACE=1`, which gives direct
+evidence about op support, kernel launches, transfers, and synchronization.
+Keep this instrumentation active and extend it as the next bottlenecks become
+more specific.
 
-Add a legacy NVIDIA debug mode that records, per graph node:
+The legacy NVIDIA trace records, per graph node:
 
 - op name and tensor name
 - tensor shape, type, strides, and byte size
@@ -105,14 +142,13 @@ Add a legacy NVIDIA debug mode that records, per graph node:
 - kernel launch count
 - optional kernel timing when `GGML_OPENCL_PROFILING=ON`
 
-This should replace the current narrow `output.weight` diagnostics with a
-general trace switch, for example an environment variable such as:
+The trace is enabled with:
 
 ```text
 GGML_OPENCL_NVIDIA_LEGACY_TRACE=1
 ```
 
-Use this instrumentation to generate an op inventory for:
+Continue using this instrumentation to generate op inventories for:
 
 ```bash
 ./build/llama.cpp-opencl-native/bin/llama-cli \
@@ -130,8 +166,9 @@ Use this instrumentation to generate an op inventory for:
   --reasoning off
 ```
 
-The output should make clear whether the next bottleneck is unsupported ops,
-unnecessary transfers, oversynchronization, or the Q4_0 kernel itself.
+At the current checkpoint, unsupported simple ops are no longer the main
+bottleneck. The next trace work should aggregate D2H transfers by tensor/op and
+distinguish final logits reads from attention fallback reads.
 
 ### 2. Make Backend Claims Match Real Kernel Support
 
@@ -220,24 +257,25 @@ Potential improvements:
 Do this before implementing more quantization families. The current model is
 already `Q4_0`; adding `Q4_K` or AWQ does not help this path.
 
-### 6. Add Minimal F32 Elementwise Kernels
+### 6. Maintain Minimal F32 Elementwise Kernels
 
-These are the next best candidates because they can keep activations on OpenCL
-between large matmuls.
+Status: implemented for the current Qwen3 run.
 
-Prioritize:
+These kernels keep activations on OpenCL between large matmuls.
+
+Currently covered:
 
 - `GGML_OP_ADD` for residual connections
-- `GGML_OP_MUL` and `GGML_OP_SCALE`
-- `GGML_OP_UNARY` with `GGML_UNARY_OP_SILU`
-- `GGML_OP_GLU` or the exact SwiGLU pattern emitted by `build_ffn`
-- `GGML_OP_CPY`, `GGML_OP_DUP`, and `GGML_OP_CONT` for device-side layout fixes
+- `GGML_OP_MUL`
+- `GGML_OP_GLU` with the exact SwiGLU pattern emitted by `build_ffn`
 - no-op handling for `RESHAPE`, `VIEW`, `PERMUTE`, and `TRANSPOSE`
 
-These kernels should be buffer-based, F32-first, and intentionally narrow. Avoid
-adding broad type support until the Qwen3 graph requires it.
+Still only add broad type/layout support when the Qwen3 graph requires it. The
+legacy path should remain buffer-based, F32-first, and intentionally narrow.
 
-### 7. Add RMS Norm Support
+### 7. Maintain RMS Norm Support
+
+Status: implemented for F32 contiguous rows in the current Qwen3 run.
 
 Qwen3 uses RMS norm in several places:
 
@@ -247,22 +285,28 @@ Qwen3 uses RMS norm in several places:
 - FFN input norm
 - final output norm
 
-Needed work:
+Completed work:
 
 - implement F32 `GGML_OP_RMS_NORM` for contiguous rows
-- implement the following scale multiply as either a separate `MUL` or a fused
-  `RMS_NORM + MUL` kernel
-- support Q/K norm shapes as well as residual-stream shapes
+- support the following scale multiply as a separate `MUL`
+- support Q/K norm shapes as well as residual-stream shapes in the traced run
+
+Remaining work:
+
 - compare OpenCL output against CPU within a documented tolerance
+- consider fusing `RMS_NORM + MUL` only if trace timing proves launch overhead
+  dominates
 
 RMS norm is a high-value target because it occurs repeatedly and sits directly
 between matmuls. Leaving it on CPU forces frequent boundary crossings.
 
-### 8. Add RoPE Support for Qwen3 Shapes
+### 8. Maintain RoPE Support for Qwen3 Shapes
+
+Status: implemented for F32 normal/NeoX RoPE in the current Qwen3 run.
 
 Qwen3 applies RoPE to Q and K after their per-head norms.
 
-Needed work:
+Completed work:
 
 - implement F32 `GGML_OP_ROPE` for the non-vision, non-MRoPE path used here
 - support the model's head dimension and position input layout
@@ -350,17 +394,26 @@ For risky changes, prefer adding a tracked experiment note under
 
 ## Recommended Implementation Order
 
+Completed:
+
 1. Instrument op placement, transfers, sync points, and kernel launches.
-2. Run the low `-ngl` sweep to establish the current performance curve.
+2. Add F32 residual and elementwise kernels.
+3. Add RMS norm for the traced Qwen3 shapes.
+4. Add Qwen3 F32 RoPE.
+5. Add F32/Q4_0 `GET_ROWS` for token embedding gathers.
+
+Next:
+
+1. Run the low `-ngl` sweep to establish the current performance curve.
+2. Add D2H transfer aggregation by tensor/op.
 3. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-4. Add F32 residual and elementwise kernels.
-5. Add RMS norm, preferably with scale multiply fused where useful.
-6. Add Qwen3 RoPE.
-7. Move KV cache for offloaded layers to OpenCL.
-8. Add a simple attention path for small context and single-token generation.
-9. Expand prompt-eval coverage.
-10. Reassess performance before broadening model or quantization support.
+4. Investigate a simple attention path for small context and single-token
+   generation.
+5. Move KV cache for offloaded layers to OpenCL only after attention behavior
+   is understood.
+6. Expand prompt-eval coverage.
+7. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 
@@ -374,13 +427,14 @@ For risky changes, prefer adding a tracked experiment note under
 
 ## Decision Point
 
-After instrumentation plus F32 elementwise/RMS norm support, run the same fixed
-prompt and compare:
+After the current non-attention coverage checkpoint, run the same fixed prompt
+and compare:
 
 ```text
 -ngl 0
 -ngl 1
 -ngl 2
+-ngl 3
 -ngl 4
 -ngl 8
 -ngl 16
@@ -389,5 +443,6 @@ prompt and compare:
 
 If generation is still far below CPU-only and traces show large unavoidable
 attention or cache costs, stop treating full OpenCL execution as a performance
-goal. At that point the fork remains valuable as a compatibility proof and an
+goal unless a narrow attention kernel has a clear path to reducing readbacks.
+At that point the fork remains valuable as a compatibility proof and an
 experiment log, but not as a practical runtime.

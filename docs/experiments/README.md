@@ -13,5 +13,10 @@ Current checkpoint:
   `opencl-nvidia-390xx`.
 - Full model-weight offload with `-ngl 100` is confirmed for
   `Qwen3-0.6B-Q4_0`, with about 319 MiB resident on `GPUOpenCL`.
-- Full offload is currently much slower than CPU-only inference. Prefer low
-  `-ngl` sweeps for the next performance experiments.
+- Trace-guided `-ngl 3` work now covers the non-attention Qwen3 ops needed for
+  the current legacy path: Q4_0 x F32 `MUL_MAT`, F32 `ADD`, `MUL`,
+  `RMS_NORM`, `ROPE`, `SWIGLU`, and Q4_0/F32 `GET_ROWS`.
+- The latest traced run rejects only `FLASH_ATTN_EXT`, but generation remains
+  much slower than CPU-only inference. The next experiments should benchmark
+  low offload counts and characterize remaining D2H transfers before attempting
+  attention.

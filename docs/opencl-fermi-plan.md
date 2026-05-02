@@ -83,9 +83,12 @@ The `fermi-opencl-legacy` branch in `third_party/llama.cpp` adds a
 - compiles a required basic OpenCL C kernel;
 - compiles an optional Q4_0 half-storage probe;
 - compiles a legacy Q4_0 x F32 matmul kernel;
+- compiles legacy F32 helper kernels for `ADD`, `MUL`, `RMS_NORM`, normal and
+  NeoX `ROPE`, `SWIGLU`, and F32/Q4_0 `GET_ROWS`;
 - keeps raw Q4_0 block buffers instead of the current OpenCL backend's
   struct-of-arrays conversion;
-- advertises only Q4_0 x F32 `MUL_MAT` plus no-op view/reshape style ops.
+- advertises only the narrow legacy NVIDIA op set that has OpenCL C 1.1
+  kernels and explicit shape checks.
 
 The first probe succeeded on the GT 540M:
 
@@ -141,12 +144,35 @@ instead of `0 MiB`, and tracks llama.cpp OpenCL buffer allocations so the
 memory breakdown no longer shows negative unaccounted memory.
 
 This broad offload path is much slower than CPU-only inference. The observed
-`-ngl 100` run produced about 0.8 generation tokens/sec. This is expected for
-the current implementation because the legacy backend supports only Q4_0 x F32
-`MUL_MAT`; unsupported graph nodes remain on CPU and can force synchronization
-and transfer overhead between CPU and GPU. The next experiment should sweep low
-offload counts (`-ngl 1`, `2`, `4`, `8`, `16`) and compare them against
-CPU-only and full-offload results.
+`-ngl 100` run produced about 0.8 generation tokens/sec.
+
+Trace-guided work on a controlled `-fit off -ngl 3 -nkvo` run has now removed
+almost all non-attention support gaps. The latest traced run used build
+`b9005-b57f9d327` and produced:
+
+```text
+[ Prompt: 9.2 t/s | Generation: 2.4 t/s ]
+supports=[queries=4310,accepted=4308,rejected=2]
+kernels=1219
+transfers=[h2d=199/106043564B,d2h=208/7158784B]
+finishes=591
+```
+
+Accepted and executed legacy ops in that run:
+
+```text
+ADD, MUL, RMS_NORM, MUL_MAT, GET_ROWS, ROPE, GLU/SWIGLU
+```
+
+The only remaining support rejection is `FLASH_ATTN_EXT`. That means the next
+performance work is no longer broad simple-op coverage. It is either attention
+support, or reducing readbacks and synchronization around the CPU attention
+fallback.
+
+The next experiment should sweep low offload counts (`-ngl 0`, `1`, `2`, `3`,
+`4`, `8`, `16`) and compare them against CPU-only and full-offload results.
+Keep `-fit off`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for
+comparability.
 
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
 is tracked in `docs/opencl-fermi-fork-roadmap.md`.
@@ -169,6 +195,7 @@ Current status:
 - OpenCL device detection: achieved.
 - Kernel compilation on NVIDIA 390xx OpenCL C 1.1: achieved.
 - Clean inference with nonzero OpenCL model memory: achieved.
+- Trace-guided non-attention Qwen3 op coverage at `-ngl 3`: achieved.
 - Performance improvement over CPU: not achieved.
 
 Strong success:

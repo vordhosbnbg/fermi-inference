@@ -18,7 +18,9 @@ practical value on this hardware.
 - `clpeak` has compiled and executed kernels successfully.
 - llama.cpp CPU inference works with `Qwen3-0.6B-Q4_0.gguf`.
 - The local llama.cpp fork proves OpenCL model-weight offload on the GT 540M,
-  but full offload is currently much slower than CPU-only inference.
+  and the traced `-ngl 3` path now keeps all targeted non-attention Qwen3 ops
+  on OpenCL. Generation is still much slower than CPU-only inference; the
+  remaining unsupported graph op is `FLASH_ATTN_EXT`.
 
 ## Repository Layout
 
@@ -32,6 +34,8 @@ practical value on this hardware.
 - `docs/experiment-protocol.md`: manual benchmark protocol.
 - `docs/opencl-fermi-fork-roadmap.md`: remaining fork work for the current
   Qwen3 `Q4_0` OpenCL path.
+- `docs/experiments/2026-05-02-opencl-legacy-op-coverage.md`: current
+  trace-guided OpenCL op coverage checkpoint.
 - `docs/reference/sources.md`: upstream references used to evaluate feasibility.
 - `results/README.md`: result logging format.
 - `third_party/llama.cpp`: llama.cpp upstream as a git submodule.
