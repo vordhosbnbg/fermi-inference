@@ -191,6 +191,20 @@ waits, and skipped no-other-device checks. Rerun the measured `-ngl 2`, `3`,
 and `4` points after rebuilding to determine whether D2H is dominated by
 attention fallback tensors, final logits, or another boundary.
 
+The attributed rerun answered that question. `sync_other` has `waits=0`, so it
+is not a real device wait on this single-OpenCL-device host. D2H has two clear
+sources:
+
+- constant full-vocabulary logits readback from the GPU output projection:
+  `result_output`, `10` transfers, `6077440` bytes
+- per-offloaded-repeating-layer attention fallback readbacks:
+  `Qcur`, `Kcur`, and `Vcur`, `99` transfers and `540672` bytes per layer
+
+The next implementation experiment should isolate output-layer placement before
+writing attention kernels. Run `-ngl 1` as the existing output-only control,
+then add a fork-only switch to keep `output.weight` on CPU while still
+offloading the last repeating layers.
+
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
 is tracked in `docs/opencl-fermi-fork-roadmap.md`.
 
@@ -214,8 +228,9 @@ Current status:
 - Clean inference with nonzero OpenCL model memory: achieved.
 - Trace-guided non-attention Qwen3 op coverage at `-ngl 3`: achieved.
 - First low-offload sweep points (`-ngl 2`, `3`, `4`): achieved; no speedup.
-- Transfer and synchronization attribution patch: implemented, needs rebuilt
-  trace output.
+- Transfer and synchronization attribution patch: achieved.
+- Output-layer and attention fallback split: identified; needs controlled
+  output-layer placement experiment.
 - Performance improvement over CPU: not achieved.
 
 Strong success:

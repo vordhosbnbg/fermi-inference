@@ -86,6 +86,20 @@ and prints final summaries for:
 - H2D/D2H transfer totals by producing op
 - `clFinish` counts by reason
 
+Attributed reruns show:
+
+- `sync_other` has `waits=0`; every call is skipped because only one OpenCL
+  device is present.
+- every `clFinish` in the final summary is `reason=synchronize`.
+- the largest D2H byte source is the constant `result_output` readback from the
+  GPU output projection: `10` transfers and `6077440` bytes.
+- each offloaded repeating layer adds Q/K/V readbacks for CPU attention:
+  `99` transfers and `540672` bytes.
+- `output.weight` is the largest H2D upload at `87515136` bytes.
+
+This separates the remaining problem into output-layer placement and
+per-layer attention fallback.
+
 ## Qwen3 Graph Surface
 
 The relevant Qwen3 graph in llama.cpp is built in
@@ -397,7 +411,35 @@ Implementation guidance:
 This is likely the largest single chunk of work. It is also the point where the
 project should reassess whether "more GPU" is still worth pursuing.
 
-### 11. Add Final Logits Handling
+### 11. Reassess Output Layer Placement
+
+The attributed trace shows that low `-ngl` runs currently offload
+`output.weight` before any repeating layer. That has two costs:
+
+- `output.weight` uploads about `87.5 MiB` to the GT 540M.
+- `result_output` reads back full F32 logits: `607744` bytes per sampled token
+  batch in the measured run.
+
+Before implementing a larger attention path, add an experiment that keeps the
+output layer on CPU while still offloading the last repeating layers. This
+should be controlled by an explicit fork-only switch or environment variable,
+not by silently changing upstream `-ngl` semantics.
+
+The first comparison should be:
+
+```text
+-ngl 1
+-ngl 2
+-ngl 3
+-ngl 4
+same values with output layer forced to CPU
+```
+
+If CPU output projection is faster overall than GPU output projection plus
+full-logits readback, keep the output layer on CPU for Fermi performance
+experiments.
+
+### 12. Add Final Logits Handling
 
 The final output projection can remain OpenCL-backed, but sampling can stay on
 CPU initially.
@@ -413,7 +455,7 @@ Needed work:
 This is a practical compromise: the decoder body can be GPU-resident while the
 small control-heavy sampling step remains CPU-side.
 
-### 12. Add Correctness Tests Before Performance Claims
+### 13. Add Correctness Tests Before Performance Claims
 
 Each new operation should have a narrow correctness test before it becomes part
 of the advertised support matrix.
@@ -444,18 +486,20 @@ Completed:
 Next:
 
 1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
-2. Rebuild and rerun `-ngl 2`, `3`, and `4` with the transfer-attribution
-   trace patch.
-3. Decide whether D2H is dominated by attention fallback tensors, final logits,
-   or another boundary.
-4. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
+2. Run `-ngl 1` to isolate output-layer offload without repeating-layer
+   attention fallback.
+3. Add an explicit experiment switch to keep `output.weight` on CPU while
+   offloading repeating layers.
+4. Decide whether output-layer placement or attention fallback is the first
+   implementation target.
+5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-5. Investigate a simple attention path for small context and single-token
+6. Investigate a simple attention path for small context and single-token
    generation.
-6. Move KV cache for offloaded layers to OpenCL only after attention behavior
+7. Move KV cache for offloaded layers to OpenCL only after attention behavior
    is understood.
-7. Expand prompt-eval coverage.
-8. Reassess performance before broadening model or quantization support.
+8. Expand prompt-eval coverage.
+9. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 

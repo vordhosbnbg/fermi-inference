@@ -24,7 +24,8 @@ practical value on this hardware.
   points show `-ngl 2` faster than `-ngl 3` and `4`, so the next useful work is
   transfer and attention attribution rather than more simple op coverage. The
   fork now has trace aggregation for transfers by tensor/op and synchronization
-  by reason for the next rebuild.
+  by reason; attributed traces split the remaining cost between GPU output-layer
+  logits readback and per-layer CPU attention fallback.
 
 ## Repository Layout
 

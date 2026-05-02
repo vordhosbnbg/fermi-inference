@@ -143,6 +143,62 @@ is still not a practical speedup. The added layers are executing their supported
 non-attention ops on OpenCL, yet each layer also introduces another attention
 fallback boundary and many more launch/readback/synchronization events.
 
+## Attributed Transfer Rerun
+
+After the transfer-attribution patch at llama.cpp fork commit `16dad336c`, the
+same `-ngl 2`, `3`, and `4` points were rerun. The generation rates are
+effectively unchanged, but the new summary explains the boundary costs.
+
+Summary:
+
+| `-ngl` | Prompt t/s | Generation t/s | D2H transfers | D2H bytes | `sync_other` waits | `sync_other` skipped | `clFinish` synchronize |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `2` | `10.9` | `2.6` | `109` | `6618112` | `0` | `1099` | `426` |
+| `3` | `10.4` | `2.5` | `208` | `7158784` | `0` | `1990` | `591` |
+| `4` | `8.0` | `2.3` | `307` | `7699456` | `0` | `2881` | `756` |
+
+The old `sync_other` number is confirmed to be bookkeeping only for these runs:
+there were no cross-device waits. All recorded `clFinish` calls were reported
+as `reason=synchronize`, so the remaining synchronization cost comes from
+backend/scheduler boundaries and blocking transfer paths, not from
+multi-OpenCL-device ordering.
+
+D2H transfer attribution:
+
+| Source | Count / bytes at `-ngl 2` | Scaling | Interpretation |
+| --- | ---: | --- | --- |
+| `result_output` from `MUL_MAT` | `10` / `6077440` | constant | full-vocabulary logits readback from the GPU output layer |
+| `Qcur-* (view) (permuted)` from `PERMUTE` | `33` / `270336` per offloaded repeating layer | per layer | Q readback for CPU attention fallback |
+| `Kcur-* (view)` from `VIEW` | `33` / `135168` per offloaded repeating layer | per layer | K readback for CPU attention fallback |
+| `Vcur-* (view)` from `VIEW` | `33` / `135168` per offloaded repeating layer | per layer | V readback for CPU attention fallback |
+
+This matches the totals exactly:
+
+```text
+D2H count = 10 + 99 * offloaded_repeating_layers
+D2H bytes = 6077440 + 540672 * offloaded_repeating_layers
+```
+
+For these low `-ngl` runs, llama.cpp counts the output layer as the first
+offloaded layer. Therefore:
+
+```text
+-ngl 2 => output layer + blk.27
+-ngl 3 => output layer + blk.26 + blk.27
+-ngl 4 => output layer + blk.25 + blk.26 + blk.27
+```
+
+The H2D transfer summary also shows that `output.weight` is the largest model
+upload by far:
+
+```text
+output.weight: 87515136 bytes
+```
+
+That output-layer placement creates the constant `result_output` readback:
+`10` transfers of `607744` bytes each, corresponding to full F32 logits for
+the model vocabulary.
+
 ## Progression
 
 The trace-guided implementation moved the fork through these checkpoints:
@@ -158,11 +214,10 @@ The `sync_other` counter is currently inflated as a diagnostic count: it is
 incremented before the backend checks whether another OpenCL device exists.
 It should not be read as 1990 real cross-device barriers.
 
-A follow-up trace patch changes this for future runs. New trace output reports
-`sync_other=[calls=<n>,waits=<n>,skipped=<n>]`, where `skipped` means no other
-OpenCL device existed and no cross-device wait was queued. It also prints
-aggregate transfer summaries by tensor/op and by producing op, plus
-`finish-summary` lines grouped by `clFinish` reason.
+The transfer-attribution patch changes this for newer runs. New trace output
+reports `sync_other=[calls=<n>,waits=<n>,skipped=<n>]`, where `skipped` means no
+other OpenCL device existed and no cross-device wait was queued. In the
+attributed rerun above, all `sync_other` calls were skipped.
 
 ## Interpretation
 
@@ -172,10 +227,16 @@ legacy NVIDIA path supports the repeated Qwen3 ops needed around offloaded
 layers except attention itself.
 
 The run is still not a performance win over CPU-only inference. Generation is
-about `2.2` to `2.6 tok/s` across the measured `-ngl 2` through `4` points,
+about `2.3` to `2.6 tok/s` across the attributed `-ngl 2` through `4` points,
 while the earlier CPU baseline for this small model was much faster. At this
-point, adding another simple elementwise kernel is unlikely to change that. The
-remaining boundary is attention and the associated host/GPU traffic.
+point, adding another simple elementwise kernel is unlikely to change that.
+
+The next useful work is split into two separate questions:
+
+- whether output-layer offload is worth it on Fermi, given the large
+  `output.weight` upload and repeated full-vocabulary `result_output` readback
+- whether a narrow attention path can remove the per-layer Q/K/V CPU fallback
+  boundary
 
 ## Next Steps
 
@@ -188,30 +249,29 @@ remaining boundary is attention and the associated host/GPU traffic.
    The `-ngl 2`, `3`, and `4` points are now recorded. Keep `-fit off`,
    `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for comparability.
 
-2. Rebuild with the transfer-attribution trace patch and rerun the measured
-   `-ngl 2`, `3`, and `4` points. Inspect the new final summary lines:
+2. Run an output-layer control experiment. The simplest existing control is
+   `-ngl 1`, which offloads the output layer but no repeating layers. It should
+   show the constant `result_output` readback without the per-layer Q/K/V
+   attention fallback.
+
+3. Add an experimental way to keep `output.weight` on CPU while still offloading
+   the last repeating layers. This would test whether removing the full-vocab
+   logits readback improves low-`-ngl` generation before implementing attention.
+
+4. If offloaded repeating layers are still slower after the output-layer control,
+   investigate a narrow decode-oriented F32 attention path for Qwen3 shapes.
+   The specific target is eliminating the per-layer D2H reads:
 
    ```text
-   transfer-op-summary direction=d2h ...
-   transfer-tensor-summary direction=d2h ...
-   finish-summary reason=...
-   sync_other=[calls=...,waits=...,skipped=...]
+   Qcur-* / Kcur-* / Vcur-*
    ```
 
-   Use these to distinguish final logits reads from CPU fallback reads and to
-   confirm whether the old `sync_other` count was only skipped single-device
-   checks.
-
-3. Investigate attention as a separate implementation phase. The next useful
-   kernel is likely a narrow decode-oriented F32 attention path for Qwen3
-   shapes, not the full generic upstream `FLASH_ATTN_EXT` implementation.
-
-4. Measure correctness before broadening support:
+5. Measure correctness before broadening support:
 
    - compare CPU-only and OpenCL logits for the same prompt
    - use short deterministic runs with fixed seed and greedy sampling
    - keep `-n` large enough to produce a complete sentence when checking output
 
-5. Only after attention measurements, decide whether KV offload is worth
+6. Only after attention measurements, decide whether KV offload is worth
    re-enabling. Current runs intentionally use `-nkvo` to keep the experiment
    focused on model-weight and activation offload.
