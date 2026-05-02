@@ -22,7 +22,8 @@ Current fork state:
 - supported quantized weight path: raw GGUF `Q4_0` block storage
 - supported matmul path: `Q4_0 x F32` `GGML_OP_MUL_MAT`
 - supported non-attention Qwen3 helper ops: F32 `ADD`, `MUL`, `RMS_NORM`,
-  normal/NeoX `ROPE`, `SWIGLU`, and F32/Q4_0 `GET_ROWS`
+  normal/NeoX `ROPE`, `SWIGLU`, F32/Q4_0 `GET_ROWS`, and narrow
+  F32/I64-to-F16 `SET_ROWS` for KV-cache writes
 - supported graph plumbing: simple view/reshape/permutation no-op style nodes
 - known working proof: `-fit off -ngl 100` puts about `319 MiB` of
   `Qwen3-0.6B-Q4_0.gguf` weights on `GPUOpenCL`
@@ -150,9 +151,20 @@ clEnqueueFillBuffer(...) error -59
 ```
 
 The fork now uses a chunked `clEnqueueWriteBuffer` fallback for legacy NVIDIA
-buffer clears. The next non-`-nkvo` measurement should confirm whether buffer
-allocation completes, then inspect the first real cache update or residency
-failure.
+buffer clears. That moved the non-`-nkvo` path to the next scheduler placement
+failure:
+
+```text
+pre-allocated tensor (cache_k_l25 (view)) in a buffer (OpenCL) that cannot run the operation (SET_ROWS)
+```
+
+This is the expected next blocker once KV cache lives on OpenCL: the cache view
+is preallocated in the OpenCL buffer, so the scheduler cannot move the update
+to CPU. The fork now adds a narrow legacy `SET_ROWS` kernel for the observed
+Qwen3 cache-write shape: F32 source rows plus I64 row indices writing into an
+F16 destination cache view. The next non-`-nkvo` measurement should confirm
+whether graph reservation passes this scheduler check and then expose the next
+cache-residency issue, if any.
 
 ## Qwen3 Graph Surface
 
@@ -569,14 +581,17 @@ Completed:
 8. Add a narrow legacy `FLASH_ATTN_EXT` kernel for Qwen3 decode attention.
 9. Extend that kernel to small `n_q <= 16` attention microbatches.
 10. Avoid `clEnqueueFillBuffer` for legacy NVIDIA buffer clears.
+11. Add narrow F32/I64-to-F16 `SET_ROWS` support for OpenCL-resident KV cache
+    writes.
 
 Next:
 
 1. Rebuild and rerun the same `-ngl 4`, `-ub 1` command without `-nkvo`.
-   Expected signal: model/context loading should pass the previous
-   `clEnqueueFillBuffer` crash point.
+   Expected signal: graph reservation should pass the previous OpenCL
+   `SET_ROWS` scheduler abort for `cache_k_l25 (view)`.
 2. If loading succeeds, inspect whether KV cache update ops execute on OpenCL
-   or expose the next unsupported cache operation.
+   and whether the attention kernel now consumes OpenCL-resident K/V cache
+   views without repeated H2D uploads.
 3. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
 4. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
 5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
