@@ -37,6 +37,15 @@ plus a `Profile Summary` section in `summary.md`. Start with a narrow sweep such
 as `--ngl 2 4` because profiling records and reads one event per profiled
 OpenCL command.
 
+The legacy Q4_0 matmul local size can be tuned per run:
+
+```bash
+./scripts/run-opencl-fermi-sweep.py --profile --q4-lws 32 --ngl 2 4
+```
+
+Omit `--q4-lws` to use the automatic heuristic. The script records the selected
+setting in metadata and parses the backend's local-size mode into `summary.tsv`.
+
 ## Run Directory Shape
 
 Suggested local files:

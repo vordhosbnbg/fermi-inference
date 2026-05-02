@@ -72,6 +72,7 @@ PROFILE_RE = re.compile(
 PROFILE_FINAL_RE = re.compile(
     r"legacy profile final summary events=(?P<events>\d+) measured=(?P<measured>\d+) skipped=(?P<skipped>\d+)"
 )
+Q4_LWS_RE = re.compile(r"legacy NVIDIA Q4_0 matmul local size: (?P<value>\S+)")
 GPU_MEM_RE = re.compile(
     r"- GPUOpenCL .*?\|\s*(?P<total>\d+)\s*=\s*(?P<free>\d+)\s*\+\s*"
     r"\(\s*(?P<self_total>\d+)\s*=\s*(?P<model>\d+)\s*\+\s*(?P<context>\d+)\s*\+\s*(?P<compute>\d+)\)\s*\+\s*(?P<unaccounted>\d+)"
@@ -191,6 +192,8 @@ def parse_log(text: str) -> dict[str, object]:
                     "total_ms": float(match.group("total_ms")),
                     "avg_exec_us": float(match.group("avg_exec_us")),
                 }
+        if match := Q4_LWS_RE.search(line):
+            data["q4_lws"] = match.group("value")
         if match := GPU_MEM_RE.search(line):
             for key, value in int_fields(match).items():
                 data[f"gpu_{key}_mib"] = value
@@ -436,6 +439,7 @@ def summary_columns() -> list[str]:
         "profile_top_host_exec_ms",
         "profile_finish_synchronize_ms",
         "profile_finish_buffer_clear_ms",
+        "q4_lws",
     ]
     for op in OPS:
         cols.extend([f"{op}_accepted", f"{op}_rejected", f"{op}_nodes", f"{op}_kernels"])
@@ -505,9 +509,9 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
         f.write("\n## Results\n\n")
         f.write(
             "| `-ngl` | completed | throughput parsed | rc | prompt t/s | gen t/s | GPU model MiB | GPU context MiB | "
-            "support rejects | kernels | H2D bytes | D2H bytes | finishes | log |\n"
+            "support rejects | kernels | H2D bytes | D2H bytes | finishes | Q4 LWS | log |\n"
         )
-        f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |\n")
+        f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- |\n")
         for result in results:
             f.write(
                 "| "
@@ -524,6 +528,7 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
                 f"{md_value(result.get('h2d_bytes'))} | "
                 f"{md_value(result.get('d2h_bytes'))} | "
                 f"{md_value(result.get('finishes'))} | "
+                f"{md_value(result.get('q4_lws'))} | "
                 f"`{md_value(result.get('log'))}` |\n"
             )
 
@@ -714,6 +719,7 @@ def make_metadata(args: argparse.Namespace, root: Path, run_dir: Path, ngl_value
         "output_cpu": "false" if args.no_output_cpu else "true",
         "trace": "false" if args.no_trace else "true",
         "profile": "true" if args.profile else "false",
+        "q4_lws": str(args.q4_lws) if args.q4_lws is not None else "auto",
         "capture_pty": "false" if args.no_pty else "true",
     }
     return metadata
@@ -734,6 +740,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-output-cpu", action="store_true", help="Do not set LLAMA_FERMI_OPENCL_OUTPUT_CPU=1")
     parser.add_argument("--no-trace", action="store_true", help="Do not set GGML_OPENCL_NVIDIA_LEGACY_TRACE=1")
     parser.add_argument("--profile", action="store_true", help="Set GGML_OPENCL_NVIDIA_LEGACY_PROFILE=1 and parse profile summaries")
+    parser.add_argument("--q4-lws", type=int, help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_LWS for legacy Q4_0 matmul tuning")
     parser.add_argument("--no-hash", action="store_true", help="Skip hashing the model file")
     parser.add_argument("--no-stream", action="store_true", help="Do not stream llama-cli output to the terminal")
     parser.add_argument("--no-pty", action="store_true", help="Capture with a pipe instead of a pseudo-terminal")
@@ -769,6 +776,8 @@ def main() -> int:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_TRACE"] = "1"
     if args.profile:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_PROFILE"] = "1"
+    if args.q4_lws is not None:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_LWS"] = str(args.q4_lws)
     if not args.no_output_cpu:
         env_vars["LLAMA_FERMI_OPENCL_OUTPUT_CPU"] = "1"
 
