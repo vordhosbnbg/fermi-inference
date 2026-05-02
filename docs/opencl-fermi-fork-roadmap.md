@@ -134,13 +134,25 @@ small prompt/reserve shape:
 q_ne=[128,16,16,1] k_ne=[128,256,8,1] v_ne=[128,256,8,1]
 ```
 
-The fork now extends the legacy attention launch across the query dimension for
-`n_q <= 16`, so the next rebuild should accept those checks too. The larger
-new cost is H2D traffic: each offloaded layer repeatedly uploads padded
-`cache_k` and `cache_v` views from CPU memory, about `17.3 MiB` per cache tensor
-over the short run. This is expected while using `-nkvo`; the next measurement
-should compare the same run without `-nkvo` to see whether GPU-resident KV cache
-is viable or exposes missing cache update ops.
+After extending the kernel across the query dimension for `n_q <= 16`, the
+same `-nkvo` shape reports no `FLASH_ATTN_EXT` support rejects. The larger cost
+is now H2D traffic: each offloaded layer repeatedly uploads padded `cache_k` and
+`cache_v` views from CPU memory, about `17.3 MiB` per cache tensor over the
+short run. This is expected while using `-nkvo`.
+
+The first non-`-nkvo` run did not reach graph execution. It crashed during
+OpenCL KV-cache buffer allocation because the backend buffer clear path called
+`clEnqueueFillBuffer`, which is not reliable on the GT 540M OpenCL 1.1 stack:
+
+```text
+ggml_backend_opencl_buffer_clear
+clEnqueueFillBuffer(...) error -59
+```
+
+The fork now uses a chunked `clEnqueueWriteBuffer` fallback for legacy NVIDIA
+buffer clears. The next non-`-nkvo` measurement should confirm whether buffer
+allocation completes, then inspect the first real cache update or residency
+failure.
 
 ## Qwen3 Graph Surface
 
@@ -556,13 +568,15 @@ Completed:
    `2.3 tok/s` generation.
 8. Add a narrow legacy `FLASH_ATTN_EXT` kernel for Qwen3 decode attention.
 9. Extend that kernel to small `n_q <= 16` attention microbatches.
+10. Avoid `clEnqueueFillBuffer` for legacy NVIDIA buffer clears.
 
 Next:
 
-1. Rebuild and rerun the fixed `-ngl 4`, `-ub 1`, `-nkvo` attention trace.
-   Expected signal: `FLASH_ATTN_EXT` support rejects drop to zero.
-2. Repeat the same run without `-nkvo` to test whether KV cache can stay
-   OpenCL-resident for offloaded layers or whether cache update ops are missing.
+1. Rebuild and rerun the same `-ngl 4`, `-ub 1` command without `-nkvo`.
+   Expected signal: model/context loading should pass the previous
+   `clEnqueueFillBuffer` crash point.
+2. If loading succeeds, inspect whether KV cache update ops execute on OpenCL
+   or expose the next unsupported cache operation.
 3. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
 4. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
 5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
