@@ -414,7 +414,7 @@ target shape is deliberately narrow:
 - head dimension `128`
 - Qwen3 `16` query heads and `8` KV heads
 - F32 Q and output
-- F16 K/V/mask as storage only, converted with `vload_half`
+- F16 or F32 K/V/mask storage, with F16 converted through `vload_half`
 - no sinks, ALiBi, or logit softcap
 - context ceiling `-c 128` for the first validation pass
 
