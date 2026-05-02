@@ -33,3 +33,7 @@ Current checkpoint:
   output layer and per-layer Q/K/V readbacks for CPU attention fallback. The
   next control is `-ngl 1`, followed by the explicit
   `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` output-on-CPU experiment.
+- The output-on-CPU experiment improves generation sharply: `-ngl 2`, `3`, and
+  `4` reach about `11.9`, `9.2`, and `7.5` generation tokens/sec. Use
+  `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance experiments; the next
+  bottleneck is per-layer attention fallback.

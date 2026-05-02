@@ -199,6 +199,60 @@ That output-layer placement creates the constant `result_output` readback:
 `10` transfers of `607744` bytes each, corresponding to full F32 logits for
 the model vocabulary.
 
+## Output-on-CPU Rerun
+
+The output-placement experiment at llama.cpp fork commit `5f50be4c7` added:
+
+```text
+LLAMA_FERMI_OPENCL_OUTPUT_CPU=1
+```
+
+With that switch enabled, `output.weight` stays on CPU while the selected
+repeating layers still use `GPUOpenCL`.
+
+Control and forced-output results:
+
+| Run | Prompt t/s | Generation t/s | GPU model MiB | Host model MiB | Kernels | D2H transfers | D2H bytes | `FLASH_ATTN_EXT` rejected |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| plain `-ngl 1` | `23.7` | `2.9` | `83` | `319` | `40` | `10` | `6077440` | `0` |
+| output CPU `-ngl 2` | `18.0` | `11.9` | `8` | `394` | `539` | `109` | `581632` | `1` |
+| output CPU `-ngl 3` | `11.9` | `9.2` | `16` | `386` | `1199` | `208` | `1122304` | `2` |
+| output CPU `-ngl 4` | `8.9` | `7.5` | `25` | `378` | `1859` | `307` | `1662976` | `3` |
+
+The output-only control confirms that GPU output projection is a poor trade on
+this hardware. Plain `-ngl 1` uploads `output.weight` (`87515136` bytes), then
+reads back full-vocabulary `result_output` tensors:
+
+```text
+result_output: 10 transfers, 6077440 bytes
+```
+
+Forcing the output layer to CPU removes that full-vocabulary readback and
+replaces it with a small final-norm readback:
+
+```text
+norm: 10 transfers, 40960 bytes
+```
+
+The remaining D2H traffic is now almost entirely attention fallback:
+
+```text
+D2H count = 10 + 99 * offloaded_repeating_layers
+D2H bytes = 40960 + 540672 * offloaded_repeating_layers
+```
+
+This changes the performance conclusion. With output forced to CPU, low
+repeating-layer offload is no longer obviously hopeless:
+
+```text
+output CPU -ngl 2: 11.9 tok/s
+output CPU -ngl 3:  9.2 tok/s
+output CPU -ngl 4:  7.5 tok/s
+```
+
+The decline across `-ngl 2`, `3`, and `4` is still regular and tracks one
+additional CPU attention fallback per layer.
+
 ## Progression
 
 The trace-guided implementation moved the fork through these checkpoints:
@@ -209,6 +263,7 @@ The trace-guided implementation moved the fork through these checkpoints:
 | Add F32 `ADD`/`MUL`/`RMS_NORM`/`SWIGLU` | `302` | `1067` | `274` | `723` | FFN/residual path mostly OpenCL-resident |
 | Add F32 RoPE | `134` | `1199` | `274` | `756` | attention projections keep RoPE on OpenCL |
 | Add `GET_ROWS` for F32 and Q4_0 | `2` | `1219` | `208` | `591` | all non-attention target ops accepted |
+| Force output layer to CPU | `1` at `-ngl 2` | `539` | `109` | `449` | removes full-vocab GPU logits readback |
 
 The `sync_other` counter is currently inflated as a diagnostic count: it is
 incremented before the backend checks whether another OpenCL device exists.
@@ -226,17 +281,15 @@ is now mostly addressed for this `-ngl 3`, `-nkvo`, short-context run. The
 legacy NVIDIA path supports the repeated Qwen3 ops needed around offloaded
 layers except attention itself.
 
-The run is still not a performance win over CPU-only inference. Generation is
-about `2.3` to `2.6 tok/s` across the attributed `-ngl 2` through `4` points,
-while the earlier CPU baseline for this small model was much faster. At this
-point, adding another simple elementwise kernel is unlikely to change that.
+The output-layer question is resolved for Fermi performance experiments: keep
+`output.weight` on CPU. The full-vocabulary logits readback dominates the plain
+low-`-ngl` runs, and removing it raises `-ngl 2` generation from `2.6 tok/s` to
+`11.9 tok/s`.
 
-The next useful work is split into two separate questions:
-
-- whether output-layer offload is worth it on Fermi, given the large
-  `output.weight` upload and repeated full-vocabulary `result_output` readback
-- whether a narrow attention path can remove the per-layer Q/K/V CPU fallback
-  boundary
+The next useful work is attention fallback. With output on CPU, each additional
+offloaded repeating layer still adds Q/K/V readbacks and a `FLASH_ATTN_EXT`
+support rejection. That is why throughput falls from `11.9 tok/s` at `-ngl 2`
+to `7.5 tok/s` at `-ngl 4`.
 
 ## Next Steps
 
@@ -254,8 +307,7 @@ The next useful work is split into two separate questions:
    show the constant `result_output` readback without the per-layer Q/K/V
    attention fallback.
 
-3. Rebuild with the output-placement experiment switch and rerun the same
-   low-offload points with output forced to CPU:
+3. Use output-on-CPU as the default shape for Fermi performance experiments:
 
    ```bash
    LLAMA_FERMI_OPENCL_OUTPUT_CPU=1 \
@@ -275,12 +327,10 @@ The next useful work is split into two separate questions:
      -ngl 3
    ```
 
-   Repeat for `-ngl 2`, `3`, and `4`. This tests whether removing the
-   full-vocab logits readback improves low-`-ngl` generation before implementing
-   attention.
+   Repeat for `-ngl 2`, `3`, `4`, `8`, and `16` if the low points remain
+   stable.
 
-4. If offloaded repeating layers are still slower after the output-layer control,
-   investigate a narrow decode-oriented F32 attention path for Qwen3 shapes.
+4. Investigate a narrow decode-oriented F32 attention path for Qwen3 shapes.
    The specific target is eliminating the per-layer D2H reads:
 
    ```text

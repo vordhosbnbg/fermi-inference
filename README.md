@@ -27,7 +27,8 @@ practical value on this hardware.
   by reason; attributed traces split the remaining cost between GPU output-layer
   logits readback and per-layer CPU attention fallback. The fork has an
   explicit `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` experiment switch to test output
-  layer placement.
+  layer placement; with it enabled, measured `-ngl 2` generation improves to
+  about `11.9 tok/s`.
 
 ## Repository Layout
 

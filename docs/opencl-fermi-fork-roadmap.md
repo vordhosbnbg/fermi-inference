@@ -100,6 +100,20 @@ Attributed reruns show:
 This separates the remaining problem into output-layer placement and
 per-layer attention fallback.
 
+The output-placement experiment resolves the first part. With
+`LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`, `output.weight` stays on CPU and low-offload
+generation improves sharply:
+
+| Run | Generation t/s | GPU model MiB | D2H bytes | Main state |
+| --- | ---: | ---: | ---: | --- |
+| plain `-ngl 1` | `2.9` | `83` | `6077440` | output-only GPU path reads back full logits |
+| output CPU `-ngl 2` | `11.9` | `8` | `581632` | one repeating layer offloaded |
+| output CPU `-ngl 3` | `9.2` | `16` | `1122304` | two repeating layers offloaded |
+| output CPU `-ngl 4` | `7.5` | `25` | `1662976` | three repeating layers offloaded |
+
+For Fermi performance experiments, keep the output layer on CPU and focus on
+the per-layer attention fallback.
+
 ## Qwen3 Graph Surface
 
 The relevant Qwen3 graph in llama.cpp is built in
@@ -413,7 +427,7 @@ project should reassess whether "more GPU" is still worth pursuing.
 
 ### 11. Reassess Output Layer Placement
 
-Status: experiment switch implemented.
+Status: resolved for current Fermi performance experiments.
 
 The attributed trace shows that low `-ngl` runs currently offload
 `output.weight` before any repeating layer. That has two costs:
@@ -447,9 +461,9 @@ With the switch enabled, the same low `-ngl` values keep the output layer on
 CPU. For example, `-ngl 3` should offload the last two repeating layers but not
 `output.weight`.
 
-If CPU output projection is faster overall than GPU output projection plus
-full-logits readback, keep the output layer on CPU for Fermi performance
-experiments.
+CPU output projection is faster overall than GPU output projection plus
+full-logits readback in the measured low-`-ngl` runs. Keep the output layer on
+CPU for Fermi performance experiments.
 
 ### 12. Add Final Logits Handling
 
@@ -498,12 +512,9 @@ Completed:
 Next:
 
 1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
-2. Run `-ngl 1` to isolate output-layer offload without repeating-layer
-   attention fallback.
-3. Rebuild and rerun `-ngl 2`, `3`, and `4` with
-   `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`.
-4. Decide whether output-layer placement or attention fallback is the first
-   implementation target.
+2. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
+3. Complete the output-on-CPU sweep with `-ngl 8` and `16`.
+4. Treat attention fallback as the next implementation target.
 5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
 6. Investigate a simple attention path for small context and single-token

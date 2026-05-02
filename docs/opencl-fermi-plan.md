@@ -205,6 +205,20 @@ writing attention kernels. Run `-ngl 1` as the existing output-only control,
 then use the fork-only `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` switch to keep
 `output.weight` on CPU while still offloading the last repeating layers.
 
+The output-layer experiment showed that this switch is required for useful
+Fermi measurements. Plain `-ngl 1` is output-only offload and reaches only
+`2.9` generation tokens/sec because it uploads `output.weight` and reads back
+`6077440` bytes of full-vocabulary logits. With output forced to CPU:
+
+| Run | Generation t/s | GPU model MiB | D2H bytes |
+| --- | ---: | ---: | ---: |
+| output CPU `-ngl 2` | `11.9` | `8` | `581632` |
+| output CPU `-ngl 3` | `9.2` | `16` | `1122304` |
+| output CPU `-ngl 4` | `7.5` | `25` | `1662976` |
+
+Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance experiments unless
+the goal is specifically to study GPU output projection.
+
 Suggested command shape for the forced-CPU output run:
 
 ```bash
@@ -225,7 +239,8 @@ GGML_OPENCL_NVIDIA_LEGACY_TRACE=1 \
   -ngl 3
 ```
 
-Repeat for `-ngl 2`, `3`, and `4`.
+Repeat for `-ngl 2`, `3`, `4`, `8`, and `16` as long as the low-offload points
+remain stable.
 
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
 is tracked in `docs/opencl-fermi-fork-roadmap.md`.
@@ -251,9 +266,10 @@ Current status:
 - Trace-guided non-attention Qwen3 op coverage at `-ngl 3`: achieved.
 - First low-offload sweep points (`-ngl 2`, `3`, `4`): achieved; no speedup.
 - Transfer and synchronization attribution patch: achieved.
-- Output-layer and attention fallback split: identified; needs controlled
-  output-layer placement measurements.
-- Forced output-on-CPU experiment switch: implemented; needs rebuilt run.
+- Output-layer and attention fallback split: identified; output-layer placement
+  resolved for current Fermi experiments.
+- Forced output-on-CPU experiment switch: achieved; use it for Fermi
+  performance measurements.
 - Performance improvement over CPU: not achieved.
 
 Strong success:
