@@ -169,9 +169,19 @@ performance work is no longer broad simple-op coverage. It is either attention
 support, or reducing readbacks and synchronization around the CPU attention
 fallback.
 
-The next experiment should sweep low offload counts (`-ngl 0`, `1`, `2`, `3`,
-`4`, `8`, `16`) and compare them against CPU-only and full-offload results.
-Keep `-fit off`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for
+The first low-offload sweep points are now recorded:
+
+| `-ngl` | Prompt t/s | Generation t/s | GPU model MiB | Kernels | D2H transfers | Finishes | Rejected support |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `2` | `14.7` | `2.6` | `91` | `559` | `109` / `6618112 B` | `426` | `1` |
+| `3` | `10.4` | `2.4` | `100` | `1219` | `208` / `7158784 B` | `591` | `2` |
+| `4` | `8.0` | `2.2` | `108` | `1879` | `307` / `7699456 B` | `756` | `3` |
+
+The trend is negative: more offloaded layers increase model residency, but also
+add regular launch/readback/synchronization work and one unsupported
+`FLASH_ATTN_EXT` fallback per additional layer. Complete the sweep with
+`-ngl 0`, `1`, `8`, and `16`, then compare against CPU-only and full-offload
+results. Keep `-fit off`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for
 comparability.
 
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
@@ -196,6 +206,7 @@ Current status:
 - Kernel compilation on NVIDIA 390xx OpenCL C 1.1: achieved.
 - Clean inference with nonzero OpenCL model memory: achieved.
 - Trace-guided non-attention Qwen3 op coverage at `-ngl 3`: achieved.
+- First low-offload sweep points (`-ngl 2`, `3`, `4`): achieved; no speedup.
 - Performance improvement over CPU: not achieved.
 
 Strong success:

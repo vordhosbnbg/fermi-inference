@@ -20,7 +20,9 @@ practical value on this hardware.
 - The local llama.cpp fork proves OpenCL model-weight offload on the GT 540M,
   and the traced `-ngl 3` path now keeps all targeted non-attention Qwen3 ops
   on OpenCL. Generation is still much slower than CPU-only inference; the
-  remaining unsupported graph op is `FLASH_ATTN_EXT`.
+  remaining unsupported graph op is `FLASH_ATTN_EXT`. Initial low-offload
+  points show `-ngl 2` faster than `-ngl 3` and `4`, so the next useful work is
+  transfer and attention attribution rather than more simple op coverage.
 
 ## Repository Layout
 

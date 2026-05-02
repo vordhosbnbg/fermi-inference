@@ -1,4 +1,4 @@
-# 2026-05-02 OpenCL Legacy Op Coverage Checkpoint
+# 2026-05-02 OpenCL Legacy Op Coverage and Low-Offload Sweep
 
 ## Run Metadata
 
@@ -42,7 +42,8 @@ Settings of interest:
 - prompt batch: `32`
 - physical microbatch: `1`
 - KV offload: disabled with `-nkvo`
-- GPU layer count: `3`
+- GPU layer count: `3` for the primary checkpoint; follow-up snippets compare
+  `-ngl 2`, `3`, and `4`
 - fit adjustment: disabled with `-fit off`
 
 ## Output
@@ -91,6 +92,57 @@ Per-op support and execution:
 | `GLU` / `SWIGLU` | accepted `24`, rejected `0` | `43` | `43` | SwiGLU now runs on OpenCL |
 | `FLASH_ATTN_EXT` | accepted `0`, rejected `2` | `0` | `0` | still intentionally unsupported |
 
+## Low-Offload Sweep Start
+
+Follow-up trace snippets were captured for the same command shape while changing
+only the offloaded layer count to `-ngl 2`, `3`, and `4`. The snippets did not
+repeat the command header, so this table inherits the same model, build, prompt,
+context, batch, microbatch, `-nkvo`, and trace settings from the primary
+checkpoint.
+
+Summary:
+
+| `-ngl` | Prompt t/s | Generation t/s | GPU model MiB | Host model MiB | Graphs | Kernels | Rejected supports | H2D transfers | D2H transfers | Finishes |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `2` | `14.7` | `2.6` | `91` | `311` | `66` | `559` | `1` | `155` / `96916652 B` | `109` / `6618112 B` | `426` |
+| `3` | `10.4` | `2.4` | `100` | `303` | `99` | `1219` | `2` | `199` / `106043564 B` | `208` / `7158784 B` | `591` |
+| `4` | `8.0` | `2.2` | `108` | `294` | `132` | `1879` | `3` | `243` / `115170476 B` | `307` / `7699456 B` | `756` |
+
+The repeated `-ngl 3` sweep snippet reported `10.4` prompt tokens/sec, while
+the primary full output above reported `9.2` prompt tokens/sec. The generation
+rate and trace totals matched the same checkpoint shape.
+
+Per-op compute node counts:
+
+| `-ngl` | `ADD` | `MUL` | `RMS_NORM` | `MUL_MAT` | `GET_ROWS` | `ROPE` | `GLU` / `SWIGLU` | `FLASH_ATTN_EXT` rejected |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `2` | `53` | `119` | `119` | `172` | `20` | `66` | `10` | `1` |
+| `3` | `119` | `251` | `251` | `403` | `20` | `132` | `43` | `2` |
+| `4` | `185` | `383` | `383` | `634` | `20` | `198` | `76` | `3` |
+
+The sweep shows a very regular per-layer cost after `-ngl 2`. Each additional
+offloaded layer adds roughly:
+
+- `660` OpenCL kernels
+- `44` H2D transfers
+- `99` D2H transfers
+- `165` `clFinish` calls
+- one additional unsupported `FLASH_ATTN_EXT` fallback
+- about `8` to `9 MiB` of additional GPU model memory
+
+Throughput moves in the wrong direction across these three points:
+
+```text
+-ngl 2: 2.6 tok/s
+-ngl 3: 2.4 tok/s
+-ngl 4: 2.2 tok/s
+```
+
+This makes `-ngl 2` the best of the measured low-offload points so far, but it
+is still not a practical speedup. The added layers are executing their supported
+non-attention ops on OpenCL, yet each layer also introduces another attention
+fallback boundary and many more launch/readback/synchronization events.
+
 ## Progression
 
 The trace-guided implementation moved the fork through these checkpoints:
@@ -114,21 +166,21 @@ legacy NVIDIA path supports the repeated Qwen3 ops needed around offloaded
 layers except attention itself.
 
 The run is still not a performance win over CPU-only inference. Generation is
-about `2.4 tok/s`, while the earlier CPU baseline for this small model was much
-faster. At this point, adding another simple elementwise kernel is unlikely to
-change that. The remaining boundary is attention and the associated host/GPU
-traffic.
+about `2.2` to `2.6 tok/s` across the measured `-ngl 2` through `4` points,
+while the earlier CPU baseline for this small model was much faster. At this
+point, adding another simple elementwise kernel is unlikely to change that. The
+remaining boundary is attention and the associated host/GPU traffic.
 
 ## Next Steps
 
-1. Run a stable benchmark sweep with the current fork:
+1. Complete the stable benchmark sweep with the current fork:
 
    ```text
-   -ngl 0, 1, 2, 3, 4, 8, 16
+   -ngl 0, 1, 8, 16
    ```
 
-   Keep `-fit off`, `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt
-   for comparability.
+   The `-ngl 2`, `3`, and `4` points are now recorded. Keep `-fit off`,
+   `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for comparability.
 
 2. Add trace detail for D2H transfers:
 

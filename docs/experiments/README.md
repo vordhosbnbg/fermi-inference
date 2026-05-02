@@ -20,3 +20,7 @@ Current checkpoint:
   much slower than CPU-only inference. The next experiments should benchmark
   low offload counts and characterize remaining D2H transfers before attempting
   attention.
+- The first low-offload sweep points show `-ngl 2`, `3`, and `4` at about
+  `2.6`, `2.4`, and `2.2` generation tokens/sec respectively. Complete the
+  remaining `-ngl 0`, `1`, `8`, and `16` points before making a final
+  performance call.

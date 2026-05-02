@@ -65,6 +65,19 @@ Per-op outcome:
   "add simple missing ops" to "measure attention/readback/synchronization
   costs."
 
+First low-offload sweep points:
+
+| `-ngl` | Prompt t/s | Generation t/s | GPU model MiB | Kernels | D2H transfers | Finishes | `FLASH_ATTN_EXT` rejections |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `2` | `14.7` | `2.6` | `91` | `559` | `109` | `426` | `1` |
+| `3` | `10.4` | `2.4` | `100` | `1219` | `208` | `591` | `2` |
+| `4` | `8.0` | `2.2` | `108` | `1879` | `307` | `756` | `3` |
+
+The `-ngl 2` to `4` trend is negative. Each additional offloaded layer after
+`-ngl 2` adds about `660` kernels, `99` D2H transfers, `165` finishes, and one
+attention fallback. That makes transfer and attention attribution more valuable
+than adding more simple F32 kernels.
+
 ## Qwen3 Graph Surface
 
 The relevant Qwen3 graph in llama.cpp is built in
@@ -404,7 +417,7 @@ Completed:
 
 Next:
 
-1. Run the low `-ngl` sweep to establish the current performance curve.
+1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
 2. Add D2H transfer aggregation by tensor/op.
 3. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
