@@ -31,18 +31,18 @@ Current fork state:
   generation because unsupported ops and synchronization dominate
 
 The current fork proves that the device can hold and use offloaded model
-weights and can execute the repeated non-attention Qwen3 ops around the
-offloaded layers. The fork now also has a narrow legacy `FLASH_ATTN_EXT` kernel
-for the Qwen3 Fermi shape, but KV-cache residency is not solved: with `-nkvo`,
-attention can execute on OpenCL while repeatedly uploading CPU-resident K/V
-cache tensors.
+weights and can execute the repeated Qwen3 ops around the offloaded layers. The
+fork now also has narrow legacy `FLASH_ATTN_EXT` and `SET_ROWS` kernels for the
+Qwen3 Fermi shapes. A short output-on-CPU `-ngl 4` run completes without
+`-nkvo`, which confirms OpenCL-resident KV cache writes and OpenCL decode
+attention for the three offloaded repeating layers.
 
 ## Current Trace-Guided Checkpoint
 
 The latest controlled run is documented in
 `docs/experiments/2026-05-02-opencl-legacy-op-coverage.md`.
 
-Run shape:
+Initial run shape:
 
 ```text
 build b9005-b57f9d327
@@ -136,10 +136,10 @@ q_ne=[128,16,16,1] k_ne=[128,256,8,1] v_ne=[128,256,8,1]
 ```
 
 After extending the kernel across the query dimension for `n_q <= 16`, the
-same `-nkvo` shape reports no `FLASH_ATTN_EXT` support rejects. The larger cost
-is now H2D traffic: each offloaded layer repeatedly uploads padded `cache_k` and
-`cache_v` views from CPU memory, about `17.3 MiB` per cache tensor over the
-short run. This is expected while using `-nkvo`.
+same `-nkvo` shape reports no `FLASH_ATTN_EXT` support rejects. With `-nkvo`,
+the larger cost is H2D traffic: each offloaded layer repeatedly uploads padded
+`cache_k` and `cache_v` views from CPU memory, about `17.3 MiB` per cache
+tensor over the short run. This is expected while using `-nkvo`.
 
 The first non-`-nkvo` run did not reach graph execution. It crashed during
 OpenCL KV-cache buffer allocation because the backend buffer clear path called
@@ -158,13 +158,32 @@ failure:
 pre-allocated tensor (cache_k_l25 (view)) in a buffer (OpenCL) that cannot run the operation (SET_ROWS)
 ```
 
-This is the expected next blocker once KV cache lives on OpenCL: the cache view
-is preallocated in the OpenCL buffer, so the scheduler cannot move the update
-to CPU. The fork now adds a narrow legacy `SET_ROWS` kernel for the observed
-Qwen3 cache-write shape: F32 source rows plus I64 row indices writing into an
-F16 destination cache view. The next non-`-nkvo` measurement should confirm
-whether graph reservation passes this scheduler check and then expose the next
-cache-residency issue, if any.
+This was the expected next blocker once KV cache lived on OpenCL: the cache
+view is preallocated in the OpenCL buffer, so the scheduler cannot move the
+update to CPU. The fork now adds a narrow legacy `SET_ROWS` kernel for the
+observed Qwen3 cache-write shape: F32 source rows plus I64 row indices writing
+into an F16 destination cache view.
+
+The follow-up output-on-CPU `-ngl 4` run without `-nkvo` now completes:
+
+```text
+[ Prompt: 9.3 t/s | Generation: 8.0 t/s ]
+supports=[queries=4857,accepted=4857,rejected=0]
+kernels=2156
+transfers=[h2d=241/26857660B,d2h=10/40960B]
+GPUOpenCL context memory: 3 MiB
+```
+
+`SET_ROWS` and `FLASH_ATTN_EXT` both execute on OpenCL:
+
+```text
+SET_ROWS supports=[accepted=72,rejected=0] compute=[nodes=198,failed=0,kernels=198]
+FLASH_ATTN_EXT supports=[accepted=36,rejected=0] compute=[nodes=99,failed=0,kernels=99]
+```
+
+The remaining D2H transfer is only the small final activation boundary for CPU
+output projection and sampling. The next question is performance and
+correctness, not missing op coverage for this short Qwen3 decode shape.
 
 ## Qwen3 Graph Surface
 
@@ -583,23 +602,22 @@ Completed:
 10. Avoid `clEnqueueFillBuffer` for legacy NVIDIA buffer clears.
 11. Add narrow F32/I64-to-F16 `SET_ROWS` support for OpenCL-resident KV cache
     writes.
+12. Confirm `-ngl 4` runs without `-nkvo`, with zero support rejects and only
+    final-boundary D2H transfer.
 
 Next:
 
-1. Rebuild and rerun the same `-ngl 4`, `-ub 1` command without `-nkvo`.
-   Expected signal: graph reservation should pass the previous OpenCL
-   `SET_ROWS` scheduler abort for `cache_k_l25 (view)`.
-2. If loading succeeds, inspect whether KV cache update ops execute on OpenCL
-   and whether the attention kernel now consumes OpenCL-resident K/V cache
-   views without repeated H2D uploads.
-3. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
-4. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
+1. Re-run the low `-ngl` sweep without `-nkvo`, using
+   `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`, for `-ngl 2`, `3`, `4`, `8`, and `16`.
+2. Add a longer decode point such as `-n 64` once the short sweep is stable.
+3. Run correctness checks against CPU-only output before treating the
+   cache-resident path as reliable.
+4. Profile launch/synchronization overhead. The no-`-nkvo` `-ngl 4` checkpoint
+   still launches `2156` kernels and records `420` finishes for `-n 8`.
 5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-6. Move KV cache for offloaded layers to OpenCL only after the non-`-nkvo`
-   behavior is understood.
-7. Expand prompt-eval coverage.
-8. Reassess performance before broadening model or quantization support.
+6. Expand prompt-eval coverage.
+7. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 

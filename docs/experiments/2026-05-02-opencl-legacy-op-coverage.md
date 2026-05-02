@@ -259,6 +259,82 @@ output CPU -ngl 16: 2.3 tok/s
 The decline across `-ngl 2`, `3`, `4`, and `16` is still regular and tracks
 one additional CPU attention fallback per layer.
 
+## KV-Resident Non-`-nkvo` Checkpoint
+
+After the legacy buffer-clear fallback and narrow F32/I64-to-F16 `SET_ROWS`
+support landed, the same output-on-CPU `-ngl 4` shape runs without `-nkvo`.
+This means the KV cache for the offloaded layers is OpenCL-resident.
+
+Command shape:
+
+```bash
+LLAMA_FERMI_OPENCL_OUTPUT_CPU=1 \
+GGML_OPENCL_NVIDIA_LEGACY_TRACE=1 \
+./build/llama.cpp-opencl-native/bin/llama-cli \
+  -fit off \
+  --device GPUOpenCL \
+  -m models/Qwen3-0.6B-Q4_0.gguf \
+  -p "Answer in one sentence: what is OpenCL?" \
+  -c 128 \
+  -n 8 \
+  -b 32 \
+  -ub 1 \
+  --single-turn \
+  --reasoning off \
+  -ngl 4
+```
+
+Result:
+
+```text
+[ Prompt: 9.3 t/s | Generation: 8.0 t/s ]
+GPUOpenCL: total 1985 MiB, free 1956 MiB, self/model/context/compute = 28/25/3/0 MiB
+Host: total 403 MiB = model 378 MiB + context 25 MiB + compute 0 MiB
+```
+
+Trace:
+
+```text
+graphs=33 nodes=2156 supports=[queries=4857,accepted=4857,rejected=0]
+kernels=2156 buffers=[count=3,bytes=29767168] tensors=747
+transfers=[h2d=241/26857660B,d2h=10/40960B]
+sync_other=[calls=3607,waits=0,skipped=3607] finishes=420
+```
+
+Per-op execution:
+
+| Op | Supports | Compute nodes | Kernels |
+| --- | ---: | ---: | ---: |
+| `ADD` | accepted `84`, rejected `0` | `185` | `185` |
+| `MUL` | accepted `1368`, rejected `0` | `373` | `373` |
+| `RMS_NORM` | accepted `156`, rejected `0` | `383` | `383` |
+| `MUL_MAT` | accepted `2385`, rejected `0` | `624` | `624` |
+| `VIEW` | accepted `72`, rejected `0` | `0` | `0` |
+| `PERMUTE` | accepted `72`, rejected `0` | `0` | `0` |
+| `GET_ROWS` | accepted `36`, rejected `0` | `20` | `20` |
+| `SET_ROWS` | accepted `72`, rejected `0` | `198` | `198` |
+| `ROPE` | accepted `72`, rejected `0` | `198` | `198` |
+| `FLASH_ATTN_EXT` | accepted `36`, rejected `0` | `99` | `99` |
+| `GLU` / `SWIGLU` | accepted `36`, rejected `0` | `76` | `76` |
+
+The D2H summary is now only:
+
+```text
+norm: 10 transfers, 40960 bytes
+```
+
+This is the intended boundary with output projection kept on CPU: the final
+activation vector is copied back for CPU output projection and sampling. The
+large `Qcur`, `Kcur`, `Vcur`, and CPU-resident `cache_k`/`cache_v` transfer
+patterns from earlier runs are gone.
+
+The performance improvement over the previous `-nkvo` attention checkpoint is
+not yet large in this short run. The important result is structural: the
+offloaded three repeating layers now form an accepted OpenCL subgraph with
+OpenCL KV cache writes and OpenCL decode attention. The next bottleneck is
+likely launch/synchronization overhead and kernel efficiency rather than
+unsupported ops or host attention fallback.
+
 ## Progression
 
 The trace-guided implementation moved the fork through these checkpoints:
@@ -271,6 +347,8 @@ The trace-guided implementation moved the fork through these checkpoints:
 | Add `GET_ROWS` for F32 and Q4_0 | `2` | `1219` | `208` | `591` | all non-attention target ops accepted |
 | Force output layer to CPU | `1` at `-ngl 2` | `539` | `109` | `449` | removes full-vocab GPU logits readback |
 | Output CPU `-ngl 16` trace | `15` | `9779` | `1495` | `2759` | confirms per-layer attention fallback dominates broader offload |
+| Add decode attention with CPU KV cache | `0` for `-nkvo` | not recorded here | high H2D | high | attention accepted but K/V cache views upload from CPU |
+| Add OpenCL KV clear and `SET_ROWS` | `0` | `2156` | `10` | `420` | `-ngl 4` runs without `-nkvo`; KV cache is OpenCL-resident |
 
 The `sync_other` counter is currently inflated as a diagnostic count: it is
 incremented before the backend checks whether another OpenCL device exists.
@@ -284,36 +362,34 @@ attributed rerun above, all `sync_other` calls were skipped.
 ## Interpretation
 
 The original bottleneck was broad CPU fallback around every OpenCL matmul. That
-is now mostly addressed for this `-ngl 3`, `-nkvo`, short-context run. The
-legacy NVIDIA path supports the repeated Qwen3 ops needed around offloaded
-layers except attention itself.
+is now addressed for the measured low-offload Qwen3 shapes. The legacy NVIDIA
+path supports the repeated Qwen3 ops needed around offloaded layers, including
+decode attention and KV cache updates for the `-ngl 4`, no-`-nkvo` checkpoint.
 
 The output-layer question is resolved for Fermi performance experiments: keep
 `output.weight` on CPU. The full-vocabulary logits readback dominates the plain
 low-`-ngl` runs, and removing it raises `-ngl 2` generation from `2.6 tok/s` to
 `11.9 tok/s`.
 
-The next useful work is attention fallback. With output on CPU, each additional
-offloaded repeating layer still adds Q/K/V readbacks and a `FLASH_ATTN_EXT`
-support rejection. That is why throughput falls from `11.9 tok/s` at `-ngl 2`
-to `7.5 tok/s` at `-ngl 4`.
+The next useful work is no longer "add the next missing op" for this shape.
+With no `-nkvo`, the run has zero support rejects and only `40960` bytes of
+D2H transfer. The remaining question is whether the OpenCL kernels and launch
+schedule can beat CPU execution once transfers are removed.
 
 ## Next Steps
 
-1. Complete the remaining stable benchmark sweep points with the current fork:
+1. Re-run the low-offload sweep without `-nkvo`:
 
    ```text
-   -ngl 0, 1, 8
+   -ngl 2, 3, 4, 8, 16
    ```
 
-   The output-on-CPU `-ngl 2`, `3`, `4`, and `16` points are now recorded.
-   Keep `-fit off`, `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt
-   for comparability.
+   Keep `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`, `-fit off`, `-c 128`, `-b 32`,
+   `-ub 1`, and the same prompt for comparability.
 
-2. Run an output-layer control experiment. The simplest existing control is
-   `-ngl 1`, which offloads the output layer but no repeating layers. It should
-   show the constant `result_output` readback without the per-layer Q/K/V
-   attention fallback.
+2. Add a longer decode point, such as `-n 64`, after the short `-n 8` sweep.
+   The short run proves graph placement; a longer run will show whether the
+   cache-resident path amortizes setup and prompt-reserve costs.
 
 3. Use output-on-CPU as the default shape for Fermi performance experiments:
 
@@ -329,28 +405,17 @@ to `7.5 tok/s` at `-ngl 4`.
      -n 8 \
      -b 32 \
      -ub 1 \
-     -nkvo \
      --single-turn \
      --reasoning off \
-     -ngl 3
+     -ngl 4
    ```
 
-   Repeat for `-ngl 2`, `3`, `4`, `8`, and `16` if the low points remain
-   stable.
-
-4. Investigate a narrow decode-oriented attention path for Qwen3 shapes.
-   The specific target is eliminating the per-layer D2H reads:
-
-   ```text
-   Qcur-* / Kcur-* / Vcur-*
-   ```
-
-5. Measure correctness before broadening support:
+4. Measure correctness before broadening support:
 
    - compare CPU-only and OpenCL logits for the same prompt
    - use short deterministic runs with fixed seed and greedy sampling
    - keep `-n` large enough to produce a complete sentence when checking output
 
-6. Only after attention measurements, decide whether KV offload is worth
-   re-enabling. Current runs intentionally use `-nkvo` to keep the experiment
-   focused on model-weight and activation offload.
+5. If correctness holds, profile the high-count kernels and synchronization
+   points. The current no-`-nkvo` `-ngl 4` checkpoint launches `2156` kernels
+   and records `420` finishes for only eight generated tokens.
