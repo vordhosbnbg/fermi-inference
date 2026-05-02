@@ -202,8 +202,30 @@ sources:
 
 The next implementation experiment should isolate output-layer placement before
 writing attention kernels. Run `-ngl 1` as the existing output-only control,
-then add a fork-only switch to keep `output.weight` on CPU while still
-offloading the last repeating layers.
+then use the fork-only `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` switch to keep
+`output.weight` on CPU while still offloading the last repeating layers.
+
+Suggested command shape for the forced-CPU output run:
+
+```bash
+LLAMA_FERMI_OPENCL_OUTPUT_CPU=1 \
+GGML_OPENCL_NVIDIA_LEGACY_TRACE=1 \
+./build/llama.cpp-opencl-native/bin/llama-cli \
+  -fit off \
+  --device GPUOpenCL \
+  -m models/Qwen3-0.6B-Q4_0.gguf \
+  -p "Answer in one sentence: what is OpenCL?" \
+  -c 128 \
+  -n 8 \
+  -b 32 \
+  -ub 1 \
+  -nkvo \
+  --single-turn \
+  --reasoning off \
+  -ngl 3
+```
+
+Repeat for `-ngl 2`, `3`, and `4`.
 
 The detailed fork roadmap for supporting more of the current Qwen3 `Q4_0` graph
 is tracked in `docs/opencl-fermi-fork-roadmap.md`.
@@ -230,7 +252,8 @@ Current status:
 - First low-offload sweep points (`-ngl 2`, `3`, `4`): achieved; no speedup.
 - Transfer and synchronization attribution patch: achieved.
 - Output-layer and attention fallback split: identified; needs controlled
-  output-layer placement experiment.
+  output-layer placement measurements.
+- Forced output-on-CPU experiment switch: implemented; needs rebuilt run.
 - Performance improvement over CPU: not achieved.
 
 Strong success:

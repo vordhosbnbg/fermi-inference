@@ -254,9 +254,30 @@ The next useful work is split into two separate questions:
    show the constant `result_output` readback without the per-layer Q/K/V
    attention fallback.
 
-3. Add an experimental way to keep `output.weight` on CPU while still offloading
-   the last repeating layers. This would test whether removing the full-vocab
-   logits readback improves low-`-ngl` generation before implementing attention.
+3. Rebuild with the output-placement experiment switch and rerun the same
+   low-offload points with output forced to CPU:
+
+   ```bash
+   LLAMA_FERMI_OPENCL_OUTPUT_CPU=1 \
+   GGML_OPENCL_NVIDIA_LEGACY_TRACE=1 \
+   ./build/llama.cpp-opencl-native/bin/llama-cli \
+     -fit off \
+     --device GPUOpenCL \
+     -m models/Qwen3-0.6B-Q4_0.gguf \
+     -p "Answer in one sentence: what is OpenCL?" \
+     -c 128 \
+     -n 8 \
+     -b 32 \
+     -ub 1 \
+     -nkvo \
+     --single-turn \
+     --reasoning off \
+     -ngl 3
+   ```
+
+   Repeat for `-ngl 2`, `3`, and `4`. This tests whether removing the
+   full-vocab logits readback improves low-`-ngl` generation before implementing
+   attention.
 
 4. If offloaded repeating layers are still slower after the output-layer control,
    investigate a narrow decode-oriented F32 attention path for Qwen3 shapes.

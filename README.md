@@ -25,7 +25,9 @@ practical value on this hardware.
   transfer and attention attribution rather than more simple op coverage. The
   fork now has trace aggregation for transfers by tensor/op and synchronization
   by reason; attributed traces split the remaining cost between GPU output-layer
-  logits readback and per-layer CPU attention fallback.
+  logits readback and per-layer CPU attention fallback. The fork has an
+  explicit `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` experiment switch to test output
+  layer placement.
 
 ## Repository Layout
 

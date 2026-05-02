@@ -413,6 +413,8 @@ project should reassess whether "more GPU" is still worth pursuing.
 
 ### 11. Reassess Output Layer Placement
 
+Status: experiment switch implemented.
+
 The attributed trace shows that low `-ngl` runs currently offload
 `output.weight` before any repeating layer. That has two costs:
 
@@ -420,10 +422,16 @@ The attributed trace shows that low `-ngl` runs currently offload
 - `result_output` reads back full F32 logits: `607744` bytes per sampled token
   batch in the measured run.
 
-Before implementing a larger attention path, add an experiment that keeps the
-output layer on CPU while still offloading the last repeating layers. This
-should be controlled by an explicit fork-only switch or environment variable,
-not by silently changing upstream `-ngl` semantics.
+Before implementing a larger attention path, test whether keeping the output
+layer on CPU improves low-offload generation. The fork now provides an explicit
+environment switch for this experiment:
+
+```text
+LLAMA_FERMI_OPENCL_OUTPUT_CPU=1
+```
+
+This switch only applies when a `GPUOpenCL` device is active. It does not change
+normal llama.cpp `-ngl` behavior unless set.
 
 The first comparison should be:
 
@@ -432,8 +440,12 @@ The first comparison should be:
 -ngl 2
 -ngl 3
 -ngl 4
-same values with output layer forced to CPU
+same values with LLAMA_FERMI_OPENCL_OUTPUT_CPU=1
 ```
+
+With the switch enabled, the same low `-ngl` values keep the output layer on
+CPU. For example, `-ngl 3` should offload the last two repeating layers but not
+`output.weight`.
 
 If CPU output projection is faster overall than GPU output projection plus
 full-logits readback, keep the output layer on CPU for Fermi performance
@@ -488,8 +500,8 @@ Next:
 1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
 2. Run `-ngl 1` to isolate output-layer offload without repeating-layer
    attention fallback.
-3. Add an explicit experiment switch to keep `output.weight` on CPU while
-   offloading repeating layers.
+3. Rebuild and rerun `-ngl 2`, `3`, and `4` with
+   `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1`.
 4. Decide whether output-layer placement or attention fallback is the first
    implementation target.
 5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection

@@ -31,4 +31,5 @@ Current checkpoint:
 - The attributed rerun shows `sync_other` has no real waits. Remaining D2H is
   split between constant full-vocabulary `result_output` readback from the GPU
   output layer and per-layer Q/K/V readbacks for CPU attention fallback. The
-  next control is `-ngl 1`, followed by an explicit output-on-CPU experiment.
+  next control is `-ngl 1`, followed by the explicit
+  `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` output-on-CPU experiment.
