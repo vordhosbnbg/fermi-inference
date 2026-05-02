@@ -24,6 +24,19 @@ The helper captures `llama-cli` through a pseudo-terminal by default because
 the human-facing prompt/generation tokens/sec line may not be printed when
 stdout is a normal pipe.
 
+To collect OpenCL command profiling in addition to the normal trace, rebuild
+the llama.cpp fork after the profiling patch and run:
+
+```bash
+./scripts/run-opencl-fermi-sweep.py --profile
+```
+
+Profiling sets `GGML_OPENCL_NVIDIA_LEGACY_PROFILE=1`, enables OpenCL queue
+profiling on the legacy NVIDIA path, and adds profile columns to `summary.tsv`
+plus a `Profile Summary` section in `summary.md`. Start with a narrow sweep such
+as `--ngl 2 4` because profiling records and reads one event per profiled
+OpenCL command.
+
 ## Run Directory Shape
 
 Suggested local files:

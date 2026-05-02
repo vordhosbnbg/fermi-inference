@@ -63,6 +63,15 @@ TRANSFER_OP_RE = re.compile(
     r"count=(?P<count>\d+) bytes=(?P<bytes>\d+) avg=(?P<avg>\d+)"
 )
 FINISH_RE = re.compile(r"legacy trace finish-summary reason=(?P<reason>\S+) count=(?P<count>\d+)")
+PROFILE_RE = re.compile(
+    r"legacy profile (?P<section>\S+) (?P<key_name>\S+)=(?P<key>\S+) "
+    r"count=(?P<count>\d+) bytes=(?P<bytes>\d+) "
+    r"queued_ms=(?P<queued_ms>[0-9.]+) submit_wait_ms=(?P<submit_wait_ms>[0-9.]+) "
+    r"exec_ms=(?P<exec_ms>[0-9.]+) total_ms=(?P<total_ms>[0-9.]+) avg_exec_us=(?P<avg_exec_us>[0-9.]+)"
+)
+PROFILE_FINAL_RE = re.compile(
+    r"legacy profile final summary events=(?P<events>\d+) measured=(?P<measured>\d+) skipped=(?P<skipped>\d+)"
+)
 GPU_MEM_RE = re.compile(
     r"- GPUOpenCL .*?\|\s*(?P<total>\d+)\s*=\s*(?P<free>\d+)\s*\+\s*"
     r"\(\s*(?P<self_total>\d+)\s*=\s*(?P<model>\d+)\s*\+\s*(?P<context>\d+)\s*\+\s*(?P<compute>\d+)\)\s*\+\s*(?P<unaccounted>\d+)"
@@ -130,6 +139,13 @@ def parse_log(text: str) -> dict[str, object]:
     ops: dict[str, dict[str, int]] = {}
     transfers: dict[tuple[str, str], dict[str, int]] = {}
     finishes_by_reason: dict[str, int] = {}
+    profile: dict[str, dict[str, dict[str, int | float]]] = {
+        "kind-summary": {},
+        "op-summary": {},
+        "kernel-summary": {},
+        "transfer-summary": {},
+        "host-summary": {},
+    }
 
     for raw_line in text.splitlines():
         line = ANSI_RE.sub("", raw_line).strip()
@@ -158,6 +174,23 @@ def parse_log(text: str) -> dict[str, object]:
             }
         if match := FINISH_RE.search(line):
             finishes_by_reason[match.group("reason")] = int(match.group("count"))
+        if match := PROFILE_FINAL_RE.search(line):
+            data["profile_events"] = int(match.group("events"))
+            data["profile_measured"] = int(match.group("measured"))
+            data["profile_skipped"] = int(match.group("skipped"))
+        if match := PROFILE_RE.search(line):
+            section = match.group("section")
+            key = match.group("key")
+            if section in profile:
+                profile[section][key] = {
+                    "count": int(match.group("count")),
+                    "bytes": int(match.group("bytes")),
+                    "queued_ms": float(match.group("queued_ms")),
+                    "submit_wait_ms": float(match.group("submit_wait_ms")),
+                    "exec_ms": float(match.group("exec_ms")),
+                    "total_ms": float(match.group("total_ms")),
+                    "avg_exec_us": float(match.group("avg_exec_us")),
+                }
         if match := GPU_MEM_RE.search(line):
             for key, value in int_fields(match).items():
                 data[f"gpu_{key}_mib"] = value
@@ -174,6 +207,7 @@ def parse_log(text: str) -> dict[str, object]:
     data["ops"] = ops
     data["transfer_ops"] = transfers
     data["finishes_by_reason"] = finishes_by_reason
+    data["profile"] = profile
     data["throughput_parsed"] = "yes" if "generation_tps" in data else "no"
     data["completed"] = "yes" if "support_rejected" in data and "finishes" in data else "no"
     return data
@@ -327,6 +361,29 @@ def finish_reason(result: dict[str, object], reason: str) -> object:
     return ""
 
 
+def profile_field(result: dict[str, object], section: str, key: str, field: str) -> object:
+    profile = result.get("profile", {})
+    if not isinstance(profile, dict):
+        return ""
+    section_value = profile.get(section, {})
+    if not isinstance(section_value, dict):
+        return ""
+    value = section_value.get(key, {})
+    if isinstance(value, dict):
+        return value.get(field, "")
+    return ""
+
+
+def profile_top_key(result: dict[str, object], section: str) -> str:
+    profile = result.get("profile", {})
+    if not isinstance(profile, dict):
+        return ""
+    section_value = profile.get(section, {})
+    if not isinstance(section_value, dict) or not section_value:
+        return ""
+    return max(section_value.items(), key=lambda item: item[1].get("exec_ms", 0.0) if isinstance(item[1], dict) else 0.0)[0]
+
+
 def summary_columns() -> list[str]:
     cols = [
         "ngl",
@@ -364,11 +421,28 @@ def summary_columns() -> list[str]:
         "finishes",
         "finish_synchronize",
         "finish_buffer_clear",
+        "profile_events",
+        "profile_measured",
+        "profile_skipped",
+        "profile_kernel_exec_ms",
+        "profile_h2d_exec_ms",
+        "profile_d2h_exec_ms",
+        "profile_clear_exec_ms",
+        "profile_top_op",
+        "profile_top_op_exec_ms",
+        "profile_top_kernel",
+        "profile_top_kernel_exec_ms",
+        "profile_top_host",
+        "profile_top_host_exec_ms",
+        "profile_finish_synchronize_ms",
+        "profile_finish_buffer_clear_ms",
     ]
     for op in OPS:
         cols.extend([f"{op}_accepted", f"{op}_rejected", f"{op}_nodes", f"{op}_kernels"])
     for direction, op in TRANSFER_OPS:
         cols.extend([f"{direction}_{op}_count", f"{direction}_{op}_bytes"])
+    for op in OPS:
+        cols.extend([f"profile_{op}_exec_ms", f"profile_{op}_avg_exec_us"])
     cols.extend(["elapsed_s", "log"])
     return cols
 
@@ -380,6 +454,21 @@ def result_row(result: dict[str, object]) -> dict[str, object]:
             row[col] = result[col]
     row["finish_synchronize"] = finish_reason(result, "synchronize")
     row["finish_buffer_clear"] = finish_reason(result, "buffer-clear")
+    row["profile_kernel_exec_ms"] = profile_field(result, "kind-summary", "kernel", "exec_ms")
+    row["profile_h2d_exec_ms"] = profile_field(result, "kind-summary", "h2d", "exec_ms")
+    row["profile_d2h_exec_ms"] = profile_field(result, "kind-summary", "d2h", "exec_ms")
+    row["profile_clear_exec_ms"] = profile_field(result, "kind-summary", "clear", "exec_ms")
+    row["profile_top_op"] = profile_top_key(result, "op-summary")
+    row["profile_top_kernel"] = profile_top_key(result, "kernel-summary")
+    row["profile_top_host"] = profile_top_key(result, "host-summary")
+    if row["profile_top_op"]:
+        row["profile_top_op_exec_ms"] = profile_field(result, "op-summary", str(row["profile_top_op"]), "exec_ms")
+    if row["profile_top_kernel"]:
+        row["profile_top_kernel_exec_ms"] = profile_field(result, "kernel-summary", str(row["profile_top_kernel"]), "exec_ms")
+    if row["profile_top_host"]:
+        row["profile_top_host_exec_ms"] = profile_field(result, "host-summary", str(row["profile_top_host"]), "exec_ms")
+    row["profile_finish_synchronize_ms"] = profile_field(result, "host-summary", "finish|synchronize", "exec_ms")
+    row["profile_finish_buffer_clear_ms"] = profile_field(result, "host-summary", "finish|buffer-clear", "exec_ms")
     for op in OPS:
         row[f"{op}_accepted"] = table_row(result, op, "accepted")
         row[f"{op}_rejected"] = table_row(result, op, "rejected")
@@ -388,6 +477,9 @@ def result_row(result: dict[str, object]) -> dict[str, object]:
     for direction, op in TRANSFER_OPS:
         row[f"{direction}_{op}_count"] = transfer_field(result, direction, op, "count")
         row[f"{direction}_{op}_bytes"] = transfer_field(result, direction, op, "bytes")
+    for op in OPS:
+        row[f"profile_{op}_exec_ms"] = profile_field(result, "op-summary", op, "exec_ms")
+        row[f"profile_{op}_avg_exec_us"] = profile_field(result, "op-summary", op, "avg_exec_us")
     return row
 
 
@@ -456,6 +548,31 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
                 nbytes = transfer_field(result, direction, op, "bytes")
                 parts.append(f"`{count}` / `{nbytes}`")
             f.write(f"| `{md_value(result.get('ngl'))}` | " + " | ".join(parts) + " |\n")
+
+        if any(result.get("profile_measured") for result in results):
+            f.write("\n## Profile Summary\n\n")
+            f.write("| `-ngl` | measured/skipped events | kernel exec ms | H2D exec ms | D2H exec ms | clear exec ms | finish sync ms | top op | top op exec ms | top kernel | top kernel exec ms | top host | top host ms |\n")
+            f.write("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- | ---: | --- | ---: |\n")
+            for result in results:
+                top_op = profile_top_key(result, "op-summary")
+                top_kernel = profile_top_key(result, "kernel-summary")
+                top_host = profile_top_key(result, "host-summary")
+                f.write(
+                    "| "
+                    f"`{md_value(result.get('ngl'))}` | "
+                    f"{md_value(result.get('profile_measured'))}/{md_value(result.get('profile_skipped'))} | "
+                    f"{md_value(profile_field(result, 'kind-summary', 'kernel', 'exec_ms'))} | "
+                    f"{md_value(profile_field(result, 'kind-summary', 'h2d', 'exec_ms'))} | "
+                    f"{md_value(profile_field(result, 'kind-summary', 'd2h', 'exec_ms'))} | "
+                    f"{md_value(profile_field(result, 'kind-summary', 'clear', 'exec_ms'))} | "
+                    f"{md_value(profile_field(result, 'host-summary', 'finish|synchronize', 'exec_ms'))} | "
+                    f"`{top_op}` | "
+                    f"{md_value(profile_field(result, 'op-summary', top_op, 'exec_ms'))} | "
+                    f"`{top_kernel}` | "
+                    f"{md_value(profile_field(result, 'kernel-summary', top_kernel, 'exec_ms'))} | "
+                    f"`{top_host}` | "
+                    f"{md_value(profile_field(result, 'host-summary', top_host, 'exec_ms'))} |\n"
+                )
 
         f.write("\n## Commands\n\n")
         for result in results:
@@ -596,6 +713,7 @@ def make_metadata(args: argparse.Namespace, root: Path, run_dir: Path, ngl_value
         "kv_offload": "disabled (-nkvo)" if args.nkvo else "enabled",
         "output_cpu": "false" if args.no_output_cpu else "true",
         "trace": "false" if args.no_trace else "true",
+        "profile": "true" if args.profile else "false",
         "capture_pty": "false" if args.no_pty else "true",
     }
     return metadata
@@ -615,6 +733,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--nkvo", action="store_true", help="Disable KV offload for comparison runs")
     parser.add_argument("--no-output-cpu", action="store_true", help="Do not set LLAMA_FERMI_OPENCL_OUTPUT_CPU=1")
     parser.add_argument("--no-trace", action="store_true", help="Do not set GGML_OPENCL_NVIDIA_LEGACY_TRACE=1")
+    parser.add_argument("--profile", action="store_true", help="Set GGML_OPENCL_NVIDIA_LEGACY_PROFILE=1 and parse profile summaries")
     parser.add_argument("--no-hash", action="store_true", help="Skip hashing the model file")
     parser.add_argument("--no-stream", action="store_true", help="Do not stream llama-cli output to the terminal")
     parser.add_argument("--no-pty", action="store_true", help="Capture with a pipe instead of a pseudo-terminal")
@@ -648,6 +767,8 @@ def main() -> int:
     env_vars: dict[str, str] = {"LC_ALL": "C"}
     if not args.no_trace:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_TRACE"] = "1"
+    if args.profile:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_PROFILE"] = "1"
     if not args.no_output_cpu:
         env_vars["LLAMA_FERMI_OPENCL_OUTPUT_CPU"] = "1"
 
