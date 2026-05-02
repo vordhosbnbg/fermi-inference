@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 
-DEFAULT_PROMPT = "Answer in one sentence: what is OpenCL?"
+DEFAULT_PROMPT = "Give me a detailed description of what is OpenCL?"
 OPS = [
     "ADD",
     "MUL",
