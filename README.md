@@ -28,7 +28,9 @@ practical value on this hardware.
   logits readback and per-layer CPU attention fallback. The fork has an
   explicit `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` experiment switch to test output
   layer placement; with it enabled, measured `-ngl 2` generation improves to
-  about `11.9 tok/s`.
+  about `11.9 tok/s`. A broader `-ngl 16` output-on-CPU trace drops back to
+  about `2.3 tok/s`, confirming that the next runtime target is the per-layer
+  `FLASH_ATTN_EXT` fallback rather than output projection.
 
 ## Repository Layout
 

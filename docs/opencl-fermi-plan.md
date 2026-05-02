@@ -215,6 +215,7 @@ Fermi measurements. Plain `-ngl 1` is output-only offload and reaches only
 | output CPU `-ngl 2` | `11.9` | `8` | `581632` |
 | output CPU `-ngl 3` | `9.2` | `16` | `1122304` |
 | output CPU `-ngl 4` | `7.5` | `25` | `1662976` |
+| output CPU `-ngl 16` | `2.3` | `126` | `8151040` |
 
 Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance experiments unless
 the goal is specifically to study GPU output projection.

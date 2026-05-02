@@ -218,6 +218,7 @@ Control and forced-output results:
 | output CPU `-ngl 2` | `18.0` | `11.9` | `8` | `394` | `539` | `109` | `581632` | `1` |
 | output CPU `-ngl 3` | `11.9` | `9.2` | `16` | `386` | `1199` | `208` | `1122304` | `2` |
 | output CPU `-ngl 4` | `8.9` | `7.5` | `25` | `378` | `1859` | `307` | `1662976` | `3` |
+| output CPU `-ngl 16` | `2.1` | `2.3` | `126` | `276` | `9779` | `1495` | `8151040` | `15` |
 
 The output-only control confirms that GPU output projection is a poor trade on
 this hardware. Plain `-ngl 1` uploads `output.weight` (`87515136` bytes), then
@@ -241,6 +242,10 @@ D2H count = 10 + 99 * offloaded_repeating_layers
 D2H bytes = 40960 + 540672 * offloaded_repeating_layers
 ```
 
+The `-ngl 16` output-on-CPU run matches this formula exactly: the output layer
+stays on CPU and the 15 offloaded repeating layers account for `1495` D2H
+transfers and `8151040` D2H bytes.
+
 This changes the performance conclusion. With output forced to CPU, low
 repeating-layer offload is no longer obviously hopeless:
 
@@ -248,10 +253,11 @@ repeating-layer offload is no longer obviously hopeless:
 output CPU -ngl 2: 11.9 tok/s
 output CPU -ngl 3:  9.2 tok/s
 output CPU -ngl 4:  7.5 tok/s
+output CPU -ngl 16: 2.3 tok/s
 ```
 
-The decline across `-ngl 2`, `3`, and `4` is still regular and tracks one
-additional CPU attention fallback per layer.
+The decline across `-ngl 2`, `3`, `4`, and `16` is still regular and tracks
+one additional CPU attention fallback per layer.
 
 ## Progression
 
@@ -264,6 +270,7 @@ The trace-guided implementation moved the fork through these checkpoints:
 | Add F32 RoPE | `134` | `1199` | `274` | `756` | attention projections keep RoPE on OpenCL |
 | Add `GET_ROWS` for F32 and Q4_0 | `2` | `1219` | `208` | `591` | all non-attention target ops accepted |
 | Force output layer to CPU | `1` at `-ngl 2` | `539` | `109` | `449` | removes full-vocab GPU logits readback |
+| Output CPU `-ngl 16` trace | `15` | `9779` | `1495` | `2759` | confirms per-layer attention fallback dominates broader offload |
 
 The `sync_other` counter is currently inflated as a diagnostic count: it is
 incremented before the backend checks whether another OpenCL device exists.
@@ -293,14 +300,15 @@ to `7.5 tok/s` at `-ngl 4`.
 
 ## Next Steps
 
-1. Complete the stable benchmark sweep with the current fork:
+1. Complete the remaining stable benchmark sweep points with the current fork:
 
    ```text
-   -ngl 0, 1, 8, 16
+   -ngl 0, 1, 8
    ```
 
-   The `-ngl 2`, `3`, and `4` points are now recorded. Keep `-fit off`,
-   `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt for comparability.
+   The output-on-CPU `-ngl 2`, `3`, `4`, and `16` points are now recorded.
+   Keep `-fit off`, `-c 128`, `-b 32`, `-ub 1`, `-nkvo`, and the same prompt
+   for comparability.
 
 2. Run an output-layer control experiment. The simplest existing control is
    `-ngl 1`, which offloads the output layer but no repeating layers. It should
@@ -330,7 +338,7 @@ to `7.5 tok/s` at `-ngl 4`.
    Repeat for `-ngl 2`, `3`, `4`, `8`, and `16` if the low points remain
    stable.
 
-4. Investigate a narrow decode-oriented F32 attention path for Qwen3 shapes.
+4. Investigate a narrow decode-oriented attention path for Qwen3 shapes.
    The specific target is eliminating the per-layer D2H reads:
 
    ```text

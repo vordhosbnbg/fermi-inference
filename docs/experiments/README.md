@@ -37,3 +37,6 @@ Current checkpoint:
   `4` reach about `11.9`, `9.2`, and `7.5` generation tokens/sec. Use
   `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance experiments; the next
   bottleneck is per-layer attention fallback.
+- The output-on-CPU `-ngl 16` run falls back to `2.3` generation tokens/sec and
+  confirms the per-layer attention cost: `15` `FLASH_ATTN_EXT` rejections,
+  `1495` D2H transfers, and `8151040` D2H bytes.

@@ -406,6 +406,18 @@ is secondary to correctness.
 The current upstream OpenCL attention support should not be assumed usable on
 Fermi. The legacy path needs a simple buffer-based attention implementation.
 
+Current first step: the fork is adding a legacy-only decode kernel for the
+observed Qwen3 shape rather than enabling the generic upstream kernels. The
+target shape is deliberately narrow:
+
+- `FLASH_ATTN_EXT` with `n_q == 1`
+- head dimension `128`
+- Qwen3 `16` query heads and `8` KV heads
+- F32 Q and output
+- F16 K/V/mask as storage only, converted with `vload_half`
+- no sinks, ALiBi, or logit softcap
+- context ceiling `-c 128` for the first validation pass
+
 Required pieces:
 
 - F32 Q x K score computation
@@ -508,21 +520,23 @@ Completed:
 3. Add RMS norm for the traced Qwen3 shapes.
 4. Add Qwen3 F32 RoPE.
 5. Add F32/Q4_0 `GET_ROWS` for token embedding gathers.
+6. Keep `output.weight` on CPU for Fermi performance measurements.
+7. Confirm output-on-CPU `-ngl 16` still scales with per-layer attention
+   fallback: `15` `FLASH_ATTN_EXT` rejections, `1495` D2H transfers, and
+   `2.3 tok/s` generation.
 
 Next:
 
-1. Complete the low `-ngl` sweep with `-ngl 0`, `1`, `8`, and `16`.
+1. Complete the remaining low `-ngl` sweep with `-ngl 0`, `1`, and `8`.
 2. Use `LLAMA_FERMI_OPENCL_OUTPUT_CPU=1` for Fermi performance measurements.
-3. Complete the output-on-CPU sweep with `-ngl 8` and `16`.
-4. Treat attention fallback as the next implementation target.
-5. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
+3. Test the narrow legacy decode attention kernel against the fixed `-c 128`,
+   `-ub 1`, Qwen3 shape before broadening support.
+4. Validate and tune the existing Q4_0 matmul kernel across all Qwen3 projection
    shapes.
-6. Investigate a simple attention path for small context and single-token
-   generation.
-7. Move KV cache for offloaded layers to OpenCL only after attention behavior
+5. Move KV cache for offloaded layers to OpenCL only after attention behavior
    is understood.
-8. Expand prompt-eval coverage.
-9. Reassess performance before broadening model or quantization support.
+6. Expand prompt-eval coverage.
+7. Reassess performance before broadening model or quantization support.
 
 ## Non-Goals
 
