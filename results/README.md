@@ -10,6 +10,16 @@ These directories are ignored by git because they may contain large logs. When a
 run produces a reusable finding, summarize it in a tracked Markdown file under
 `docs/experiments/`.
 
+The current Fermi OpenCL sweep helper writes this shape automatically:
+
+```bash
+./scripts/run-opencl-fermi-sweep.py
+```
+
+By default it runs the no-`-nkvo`, output-on-CPU sweep for
+`-ngl 2 3 4 8 16`, writes raw logs under `results/runs/.../logs/`, and writes
+both `summary.md` and `summary.tsv`.
+
 ## Run Directory Shape
 
 Suggested local files:

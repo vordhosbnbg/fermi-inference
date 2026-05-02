@@ -16,6 +16,8 @@ results/runs/*
 .env
 .env.*
 *.local
+__pycache__/
+*.pyc
 
 # Editor and OS noise
 .idea/
