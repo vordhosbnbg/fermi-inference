@@ -725,7 +725,7 @@ def make_metadata(args: argparse.Namespace, root: Path, run_dir: Path, ngl_value
         "trace": "false" if args.no_trace else "true",
         "profile": "true" if args.profile else "false",
         "q4_lws": str(args.q4_lws) if args.q4_lws is not None else "auto",
-        "q4_row_tile": str(args.q4_row_tile) if args.q4_row_tile is not None else "1",
+        "q4_row_tile": str(args.q4_row_tile) if args.q4_row_tile is not None else "4",
         "capture_pty": "false" if args.no_pty else "true",
     }
     return metadata
@@ -747,7 +747,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-trace", action="store_true", help="Do not set GGML_OPENCL_NVIDIA_LEGACY_TRACE=1")
     parser.add_argument("--profile", action="store_true", help="Set GGML_OPENCL_NVIDIA_LEGACY_PROFILE=1 and parse profile summaries")
     parser.add_argument("--q4-lws", type=int, help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_LWS for legacy Q4_0 matmul tuning")
-    parser.add_argument("--q4-row-tile", type=int, choices=[1, 2, 4], help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_ROW_TILE for experimental row-tiled matmul")
+    parser.add_argument("--q4-row-tile", type=int, choices=[1, 2, 4, 8], help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_ROW_TILE for legacy Q4_0 matmul")
     parser.add_argument("--no-hash", action="store_true", help="Skip hashing the model file")
     parser.add_argument("--no-stream", action="store_true", help="Do not stream llama-cli output to the terminal")
     parser.add_argument("--no-pty", action="store_true", help="Capture with a pipe instead of a pseudo-terminal")

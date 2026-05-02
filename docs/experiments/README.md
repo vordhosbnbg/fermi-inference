@@ -40,3 +40,9 @@ Current checkpoint:
 - The output-on-CPU `-ngl 16` run falls back to `2.3` generation tokens/sec and
   confirms the per-layer attention cost: `15` `FLASH_ATTN_EXT` rejections,
   `1495` D2H transfers, and `8151040` D2H bytes.
+- Decode attention, OpenCL KV cache writes, local-size tuning, and Q4_0 row
+  tiling now give zero-reject low-offload runs. Row tile 4 is the default after
+  cutting Q4_0 matmul time by about half; row tile 8 improves the measured
+  `-ngl 2` and `-ngl 4` points further to `16.8` and `11.2` generation
+  tokens/sec, respectively. Attention and launch overhead are now the main
+  remaining targets.

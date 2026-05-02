@@ -46,11 +46,19 @@ The legacy Q4_0 matmul local size can be tuned per run:
 Omit `--q4-lws` to use the automatic heuristic. The script records the selected
 setting in metadata and parses the backend's local-size mode into `summary.tsv`.
 
-The experimental row-tiled Q4_0 matmul path computes multiple output rows per
-OpenCL workgroup. It is opt-in while validating correctness and speed:
+The legacy Q4_0 matmul path computes multiple output rows per OpenCL workgroup.
+Row tile 4 is the backend default after the `2026-05-03` sweeps showed it cut
+Q4_0 matmul time by about half versus row tile 1 on the GT 540M. Force a
+specific tile for comparisons with:
 
 ```bash
 ./scripts/run-opencl-fermi-sweep.py --profile --q4-row-tile 4 --ngl 2 4
+```
+
+Row tile 8 is available as an experimental probe:
+
+```bash
+./scripts/run-opencl-fermi-sweep.py --profile --q4-row-tile 8 --ngl 2 4
 ```
 
 ## Run Directory Shape
