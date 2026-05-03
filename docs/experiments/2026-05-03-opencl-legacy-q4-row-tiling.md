@@ -25,6 +25,7 @@ Raw run directories:
 - `results/runs/2026-05-03-004317-opencl-fermi-sweep`: row tile 2
 - `results/runs/2026-05-03-010242-opencl-fermi-sweep`: row tile 4 default
 - `results/runs/2026-05-03-010335-opencl-fermi-sweep`: row tile 8 probe
+- `results/runs/2026-05-03-012810-opencl-fermi-sweep`: row tile 16 probe
 
 ## Results
 
@@ -38,6 +39,8 @@ Raw run directories:
 | `2` | `4` | `11.8` | `8.5` | `5830.740` | `4710.426` | `1087.117` |
 | `4` | `4` | `14.5` | `10.5` | `4387.959` | `3269.017` | `1086.122` |
 | `8` | `4` | `16.5` | `11.2` | `3995.837` | `2876.013` | `1086.712` |
+| `16` | `2` | `27.8` | `12.5` | `1939.589` | `1564.062` | `362.497` |
+| `16` | `4` | `12.0` | `8.4` | `6425.774` | `5306.114` | `1086.539` |
 
 The CPU-only `-ngl 1` baseline in the row-tile-4 run was `20.5` generation
 tokens/sec with no OpenCL kernels. The best GPU-offload point remains below
@@ -47,7 +50,7 @@ that baseline, but the gap is significantly smaller than before row tiling.
 
 Row tiling directly improves the legacy Q4_0 x F32 matmul kernel by reusing the
 same activation vector across multiple output rows in one workgroup. The effect
-is monotonic in the measured points:
+is monotonic through row tile 8 in the measured points:
 
 | Comparison | `-ngl` | Generation change | Kernel time change | `MUL_MAT` time change |
 | --- | ---: | ---: | ---: | ---: |
@@ -57,6 +60,10 @@ is monotonic in the measured points:
 | row tile 4 vs 1 | `4` | `+25.0%` | `-42.1%` | `-49.4%` |
 | row tile 8 vs 1 | `4` | `+33.3%` | `-47.3%` | `-55.5%` |
 | row tile 8 vs 4 | `4` | `+6.7%` | `-8.9%` | `-12.0%` |
+
+Row tile 16 was tested as a follow-up and is not a useful direction. It
+regresses generation throughput to `12.5` tok/s at `-ngl 2` and `8.4` tok/s at
+`-ngl 4`, with Q4_0 matmul returning to the top of the profile.
 
 The row-tile-8 kernel compiled and executed on the GT 540M:
 
@@ -90,3 +97,5 @@ points, but it is more register-heavy and should remain easy to disable.
 The next performance target is decode attention and launch overhead, not
 additional op coverage. The `-ngl 2` row-tile-8 run has zero support rejects,
 small D2H traffic, and attention is now the single largest kernel.
+The follow-up mask-skip result is tracked in
+`docs/experiments/2026-05-03-opencl-legacy-attention-mask-skip.md`.

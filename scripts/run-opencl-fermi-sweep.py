@@ -25,6 +25,7 @@ OPS = [
     "MUL",
     "RMS_NORM",
     "MUL_MAT",
+    "CPY",
     "VIEW",
     "PERMUTE",
     "GET_ROWS",
@@ -74,6 +75,9 @@ PROFILE_FINAL_RE = re.compile(
 )
 Q4_LWS_RE = re.compile(r"legacy NVIDIA Q4_0 matmul local size: (?P<value>\S+)")
 Q4_ROW_TILE_RE = re.compile(r"legacy NVIDIA Q4_0 matmul row tile: (?P<value>\d+)")
+Q4_COLS1_RE = re.compile(r"legacy NVIDIA Q4_0 matmul cols1 specialization: (?P<value>\S+)")
+Q4_WARP_PACK_RE = re.compile(r"legacy NVIDIA Q4_0 matmul warp-pack specialization: (?P<value>\S+)")
+Q4_WARP_SYNC_RE = re.compile(r"legacy NVIDIA Q4_0 matmul warp-sync reduction: (?P<value>\S+)")
 GPU_MEM_RE = re.compile(
     r"- GPUOpenCL .*?\|\s*(?P<total>\d+)\s*=\s*(?P<free>\d+)\s*\+\s*"
     r"\(\s*(?P<self_total>\d+)\s*=\s*(?P<model>\d+)\s*\+\s*(?P<context>\d+)\s*\+\s*(?P<compute>\d+)\)\s*\+\s*(?P<unaccounted>\d+)"
@@ -84,6 +88,7 @@ HOST_MEM_RE = re.compile(
 PLATFORM_RE = re.compile(r"ggml_opencl: selected platform: '(?P<value>.*)'")
 DEVICE_RE = re.compile(r"ggml_opencl: device: '(?P<value>.*)'")
 DRIVER_RE = re.compile(r"ggml_opencl: OpenCL driver: (?P<value>.*)")
+ATTN_WG_RE = re.compile(r"legacy NVIDIA decode attention workgroup size: (?P<value>\d+)")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 NGL_LOG_RE = re.compile(r"opencl-ngl-(?P<ngl>\d+)\.log$")
 NGL_CMD_RE = re.compile(r"(?:^|\s)-ngl\s+(?P<ngl>\d+)(?:\s|$)")
@@ -197,6 +202,14 @@ def parse_log(text: str) -> dict[str, object]:
             data["q4_lws"] = match.group("value")
         if match := Q4_ROW_TILE_RE.search(line):
             data["q4_row_tile"] = match.group("value")
+        if match := Q4_COLS1_RE.search(line):
+            data["q4_cols1"] = match.group("value")
+        if match := Q4_WARP_PACK_RE.search(line):
+            data["q4_warp_pack"] = match.group("value")
+        if match := Q4_WARP_SYNC_RE.search(line):
+            data["q4_warp_sync"] = match.group("value")
+        if match := ATTN_WG_RE.search(line):
+            data["attention_wg"] = match.group("value")
         if match := GPU_MEM_RE.search(line):
             for key, value in int_fields(match).items():
                 data[f"gpu_{key}_mib"] = value
@@ -427,6 +440,10 @@ def summary_columns() -> list[str]:
         "finishes",
         "finish_synchronize",
         "finish_buffer_clear",
+        "attention_wg",
+        "q4_cols1",
+        "q4_warp_pack",
+        "q4_warp_sync",
         "profile_events",
         "profile_measured",
         "profile_skipped",
@@ -513,9 +530,9 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
         f.write("\n## Results\n\n")
         f.write(
             "| `-ngl` | completed | throughput parsed | rc | prompt t/s | gen t/s | GPU model MiB | GPU context MiB | "
-            "support rejects | kernels | H2D bytes | D2H bytes | finishes | Q4 LWS | Q4 rows | log |\n"
+            "support rejects | kernels | H2D bytes | D2H bytes | finishes | attention WG | Q4 cols1 | Q4 warp-pack | Q4 warp-sync | Q4 LWS | Q4 rows | log |\n"
         )
-        f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |\n")
+        f.write("| ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- | ---: | --- |\n")
         for result in results:
             f.write(
                 "| "
@@ -532,6 +549,10 @@ def write_summary_md(path: Path, metadata: dict[str, str], results: list[dict[st
                 f"{md_value(result.get('h2d_bytes'))} | "
                 f"{md_value(result.get('d2h_bytes'))} | "
                 f"{md_value(result.get('finishes'))} | "
+                f"{md_value(result.get('attention_wg'))} | "
+                f"{md_value(result.get('q4_cols1'))} | "
+                f"{md_value(result.get('q4_warp_pack'))} | "
+                f"{md_value(result.get('q4_warp_sync'))} | "
                 f"{md_value(result.get('q4_lws'))} | "
                 f"{md_value(result.get('q4_row_tile'))} | "
                 f"`{md_value(result.get('log'))}` |\n"
@@ -724,6 +745,10 @@ def make_metadata(args: argparse.Namespace, root: Path, run_dir: Path, ngl_value
         "output_cpu": "false" if args.no_output_cpu else "true",
         "trace": "false" if args.no_trace else "true",
         "profile": "true" if args.profile else "false",
+        "attention_wg": str(args.attn_wg) if args.attn_wg is not None else "64",
+        "q4_cols1": "false" if args.no_q4_cols1 else "true",
+        "q4_warp_pack": "true" if args.q4_warp_pack else "false",
+        "q4_warp_sync": "true" if args.q4_warp_sync else "false",
         "q4_lws": str(args.q4_lws) if args.q4_lws is not None else "auto",
         "q4_row_tile": str(args.q4_row_tile) if args.q4_row_tile is not None else "4",
         "capture_pty": "false" if args.no_pty else "true",
@@ -746,6 +771,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-output-cpu", action="store_true", help="Do not set LLAMA_FERMI_OPENCL_OUTPUT_CPU=1")
     parser.add_argument("--no-trace", action="store_true", help="Do not set GGML_OPENCL_NVIDIA_LEGACY_TRACE=1")
     parser.add_argument("--profile", action="store_true", help="Set GGML_OPENCL_NVIDIA_LEGACY_PROFILE=1 and parse profile summaries")
+    parser.add_argument("--attn-wg", type=int, choices=[16, 32, 64, 128], help="Set GGML_OPENCL_NVIDIA_LEGACY_ATTN_WG for legacy decode attention")
+    parser.add_argument("--no-q4-cols1", action="store_true", help="Disable the legacy Q4_0 row-tile-8 cols1 matmul specialization")
+    parser.add_argument("--q4-warp-pack", action="store_true", help="Enable experimental legacy Q4_0 row-tile-8 cols1 warp-packed matmul specializations")
+    parser.add_argument("--q4-warp-sync", action="store_true", help="Enable experimental warp-synchronous reductions inside legacy Q4_0 warp-packed matmul kernels")
     parser.add_argument("--q4-lws", type=int, help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_LWS for legacy Q4_0 matmul tuning")
     parser.add_argument("--q4-row-tile", type=int, choices=[1, 2, 4, 8], help="Set GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_ROW_TILE for legacy Q4_0 matmul")
     parser.add_argument("--no-hash", action="store_true", help="Skip hashing the model file")
@@ -783,6 +812,14 @@ def main() -> int:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_TRACE"] = "1"
     if args.profile:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_PROFILE"] = "1"
+    if args.attn_wg is not None:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_ATTN_WG"] = str(args.attn_wg)
+    if args.no_q4_cols1:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_DISABLE_COLS1"] = "1"
+    if args.q4_warp_pack:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_WARP_PACK"] = "1"
+    if args.q4_warp_sync:
+        env_vars["GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_WARP_SYNC"] = "1"
     if args.q4_lws is not None:
         env_vars["GGML_OPENCL_NVIDIA_LEGACY_Q4_0_MUL_MAT_LWS"] = str(args.q4_lws)
     if args.q4_row_tile is not None:
